@@ -34,12 +34,12 @@ jobs:
           [[ -n "${HOST:-}" ]] || { echo 'Missing GitHub secret: HOST'; exit 1; }
           [[ -n "${SSHPASS:-}" ]] || { echo 'Missing GitHub secret: PASS'; exit 1; }
 
-      - name: Install SSH password client
+      - name: Install deployment and smoke-test tools
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update -y
-          sudo apt-get install -y sshpass
+          sudo apt-get install -y sshpass wireguard-tools iputils-ping
 
       - name: Copy deployment scripts
         shell: bash
@@ -70,5 +70,42 @@ jobs:
             test -s /root/gravitas-vpn/clients/ahmad.conf
             test -s /root/gravitas-vpn/clients/ehsan.conf
             echo "WireGuard service is active and all four Gravitas client configs exist on the server."
-            wg show wg0 | sed -E "s/(public key: ).*/\1[present]/; s/(preshared key: ).*/\1[present]/"
           '
+
+      - name: Test WireGuard from outside the server
+        shell: bash
+        run: |
+          set -euo pipefail
+          SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15'
+          CFG='/tmp/gravitas-ci-smoke.conf'
+
+          cleanup() {
+            sudo wg-quick down "${CFG}" >/dev/null 2>&1 || true
+            rm -f "${CFG}"
+            sshpass -e ssh ${SSH_OPTS} root@"${HOST}" 'gravitas-vpn-peer revoke ci-smoke >/dev/null 2>&1 || true' || true
+          }
+          trap cleanup EXIT
+
+          sshpass -e ssh ${SSH_OPTS} root@"${HOST}" '
+            if [ -d /etc/wireguard/gravitas/peers/ci-smoke ]; then
+              gravitas-vpn-peer revoke ci-smoke >/dev/null 2>&1 || true
+            fi
+            gravitas-vpn-peer add ci-smoke >/dev/null
+          '
+          sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/clients/ci-smoke.conf "${CFG}"
+          chmod 600 "${CFG}"
+
+          # The smoke test only routes the private VPN subnet, so the runner's own
+          # GitHub traffic is never sent through the VPN.
+          sed -i '/^DNS =/d' "${CFG}"
+          sed -i 's#^AllowedIPs = 0.0.0.0/0#AllowedIPs = 10.77.0.0/24#' "${CFG}"
+
+          sudo wg-quick up "${CFG}" >/dev/null
+          ping -c 3 -W 3 10.77.0.1 >/dev/null
+
+          HANDSHAKE="$(sudo wg show "$(basename "${CFG}" .conf)" latest-handshakes | awk '{print $2; exit}')"
+          [[ -n "${HANDSHAKE}" && "${HANDSHAKE}" != "0" ]] || {
+            echo 'WireGuard tunnel came up but no handshake was observed.' >&2
+            exit 1
+          }
+          echo 'External WireGuard handshake and tunnel ping succeeded.'
