@@ -66,15 +66,12 @@ jobs:
             systemctl is-active --quiet xray
             /usr/local/bin/xray run -test -config /usr/local/etc/xray/config.json
             test -s /etc/gravitas-xray/port
-            test -s /root/gravitas-vpn/xray-clients/hossein.vless.txt
-            test -s /root/gravitas-vpn/xray-clients/kiarash.vless.txt
-            test -s /root/gravitas-vpn/xray-clients/ahmad.vless.txt
-            test -s /root/gravitas-vpn/xray-clients/ehsan.vless.txt
-            test -s /root/gravitas-vpn/xray-clients/hossein.png
-            test -s /root/gravitas-vpn/xray-clients/kiarash.png
-            test -s /root/gravitas-vpn/xray-clients/ahmad.png
-            test -s /root/gravitas-vpn/xray-clients/ehsan.png
-            echo "Xray is active and all four Gravitas client profiles exist on the server."
+            for user in hossein kiarash ahmad ehsan sajjad; do
+              test -s "/root/gravitas-vpn/xray-clients/${user}.vless.txt"
+              test -s "/root/gravitas-vpn/xray-clients/${user}.png"
+              test -s "/root/gravitas-vpn/xray-clients/${user}.json"
+            done
+            echo "Xray is active and all five Gravitas client profiles exist on the server."
           '
 
       - name: Test public TCP reachability
@@ -93,7 +90,7 @@ jobs:
           set -euo pipefail
           SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15'
           mkdir -p gravitas-xray-clients
-          for user in hossein kiarash ahmad ehsan; do
+          for user in hossein kiarash ahmad ehsan sajjad; do
             sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/xray-clients/${user}.vless.txt gravitas-xray-clients/
             sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/xray-clients/${user}.png gravitas-xray-clients/
             sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/xray-clients/${user}.json gravitas-xray-clients/
