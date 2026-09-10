@@ -34,77 +34,55 @@ jobs:
           [[ -n "${HOST:-}" ]] || { echo 'Missing GitHub secret: HOST'; exit 1; }
           [[ -n "${SSHPASS:-}" ]] || { echo 'Missing GitHub secret: PASS'; exit 1; }
 
-      - name: Install deployment and smoke-test tools
+      - name: Install SSH and network test tools
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update -y
-          sudo apt-get install -y sshpass wireguard-tools iputils-ping
+          sudo apt-get install -y sshpass netcat-openbsd
 
-      - name: Copy deployment scripts
+      - name: Copy Xray deployment scripts
         shell: bash
         run: |
           set -euo pipefail
           SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3'
           sshpass -e ssh ${SSH_OPTS} root@"${HOST}" 'mkdir -p /opt/gravitas-vpn/scripts && chmod 700 /opt/gravitas-vpn'
-          sshpass -e scp ${SSH_OPTS} scripts/setup_wireguard.sh scripts/manage_peer.sh root@"${HOST}":/opt/gravitas-vpn/scripts/
+          sshpass -e scp ${SSH_OPTS} scripts/setup_xray.sh scripts/manage_xray_user.sh root@"${HOST}":/opt/gravitas-vpn/scripts/
 
-      - name: Configure WireGuard
+      - name: Configure Xray VLESS Reality
         shell: bash
         run: |
           set -euo pipefail
           SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3'
-          sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "chmod 700 /opt/gravitas-vpn/scripts/*.sh && /opt/gravitas-vpn/scripts/setup_wireguard.sh '${HOST}'"
+          sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "chmod 700 /opt/gravitas-vpn/scripts/*.sh && /opt/gravitas-vpn/scripts/setup_xray.sh '${HOST}'"
 
-      - name: Verify server state
+      - name: Verify Xray server state
         shell: bash
         run: |
           set -euo pipefail
           SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15'
           sshpass -e ssh ${SSH_OPTS} root@"${HOST}" '
             set -e
-            systemctl is-active --quiet wg-quick@wg0
-            test "$(sysctl -n net.ipv4.ip_forward)" = "1"
-            test -s /root/gravitas-vpn/clients/hossein.conf
-            test -s /root/gravitas-vpn/clients/kiarash.conf
-            test -s /root/gravitas-vpn/clients/ahmad.conf
-            test -s /root/gravitas-vpn/clients/ehsan.conf
-            echo "WireGuard service is active and all four Gravitas client configs exist on the server."
+            systemctl is-active --quiet xray
+            /usr/local/bin/xray run -test -config /usr/local/etc/xray/config.json
+            test -s /etc/gravitas-xray/port
+            test -s /root/gravitas-vpn/xray-clients/hossein.vless.txt
+            test -s /root/gravitas-vpn/xray-clients/kiarash.vless.txt
+            test -s /root/gravitas-vpn/xray-clients/ahmad.vless.txt
+            test -s /root/gravitas-vpn/xray-clients/ehsan.vless.txt
+            test -s /root/gravitas-vpn/xray-clients/hossein.png
+            test -s /root/gravitas-vpn/xray-clients/kiarash.png
+            test -s /root/gravitas-vpn/xray-clients/ahmad.png
+            test -s /root/gravitas-vpn/xray-clients/ehsan.png
+            echo "Xray is active and all four Gravitas client profiles exist on the server."
           '
 
-      - name: Test WireGuard from outside the server
+      - name: Test public TCP reachability
         shell: bash
         run: |
           set -euo pipefail
           SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15'
-          CFG='/tmp/gv-ci.conf'
-
-          cleanup() {
-            sudo wg-quick down "${CFG}" >/dev/null 2>&1 || true
-            rm -f "${CFG}"
-            sshpass -e ssh ${SSH_OPTS} root@"${HOST}" 'gravitas-vpn-peer revoke ci-smoke >/dev/null 2>&1 || true' || true
-          }
-          trap cleanup EXIT
-
-          sshpass -e ssh ${SSH_OPTS} root@"${HOST}" '
-            if [ -d /etc/wireguard/gravitas/peers/ci-smoke ]; then
-              gravitas-vpn-peer revoke ci-smoke >/dev/null 2>&1 || true
-            fi
-            gravitas-vpn-peer add ci-smoke >/dev/null
-          '
-          sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/clients/ci-smoke.conf "${CFG}"
-          chmod 600 "${CFG}"
-
-          # Only the private VPN subnet is routed during CI; GitHub traffic stays direct.
-          sed -i '/^DNS =/d' "${CFG}"
-          sed -i 's#^AllowedIPs = 0.0.0.0/0#AllowedIPs = 10.77.0.0/24#' "${CFG}"
-
-          sudo wg-quick up "${CFG}" >/dev/null
-          ping -c 3 -W 3 10.77.0.1 >/dev/null
-
-          HANDSHAKE="$(sudo wg show gv-ci latest-handshakes | awk '{print $2; exit}')"
-          [[ -n "${HANDSHAKE}" && "${HANDSHAKE}" != "0" ]] || {
-            echo 'WireGuard tunnel came up but no handshake was observed.' >&2
-            exit 1
-          }
-          echo 'External WireGuard handshake and tunnel ping succeeded.'
+          PORT="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" 'cat /etc/gravitas-xray/port')"
+          [[ "$PORT" =~ ^[0-9]+$ ]] || { echo 'Invalid Xray port returned by server.' >&2; exit 1; }
+          nc -zvw 8 "${HOST}" "${PORT}"
+          echo "External TCP reachability to Xray succeeded on port ${PORT}."
