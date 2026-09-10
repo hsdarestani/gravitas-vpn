@@ -86,3 +86,24 @@ jobs:
           [[ "$PORT" =~ ^[0-9]+$ ]] || { echo 'Invalid Xray port returned by server.' >&2; exit 1; }
           nc -zvw 8 "${HOST}" "${PORT}"
           echo "External TCP reachability to Xray succeeded on port ${PORT}."
+
+      - name: Collect team client bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15'
+          mkdir -p gravitas-xray-clients
+          for user in hossein kiarash ahmad ehsan; do
+            sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/xray-clients/${user}.vless.txt gravitas-xray-clients/
+            sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/xray-clients/${user}.png gravitas-xray-clients/
+            sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/xray-clients/${user}.json gravitas-xray-clients/
+          done
+          chmod -R go-rwx gravitas-xray-clients
+
+      - name: Upload short-lived team bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: gravitas-xray-clients
+          path: gravitas-xray-clients/
+          if-no-files-found: error
+          retention-days: 1
