@@ -55,8 +55,9 @@ chmod 600 "$STATE_DIR/port"
 if [[ ! -s "$STATE_DIR/reality-private" || ! -s "$STATE_DIR/reality-password" ]]; then
   key_output="$($XRAY_BIN x25519)"
   private_key="$(printf '%s\n' "$key_output" | awk -F': *' '/^(PrivateKey|Private key):/ {print $2; exit}')"
-  # New Xray calls the old public key "Password". Keep support for older output too.
-  reality_password="$(printf '%s\n' "$key_output" | awk -F': *' '/^(Password|PublicKey|Public key):/ {print $2; exit}')"
+  # Xray renamed the old public key to Password and newer versions print
+  # "Password (PublicKey)". Accept all known formats without exposing the key.
+  reality_password="$(printf '%s\n' "$key_output" | awk -F': *' '/^(Password( \(PublicKey\))?|PublicKey|Public key):/ {print $2; exit}')"
   [[ -n "$private_key" && -n "$reality_password" ]] || {
     echo "Could not parse Xray x25519 output." >&2
     exit 1
