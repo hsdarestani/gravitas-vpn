@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - 'scripts/**'
+      - 'panel/**'
       - '.github/workflows/deploy.yml'
 
 permissions:
@@ -41,13 +42,14 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y sshpass netcat-openbsd
 
-      - name: Copy Xray deployment scripts
+      - name: Copy deployment assets
         shell: bash
         run: |
           set -euo pipefail
           SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3'
-          sshpass -e ssh ${SSH_OPTS} root@"${HOST}" 'mkdir -p /opt/gravitas-vpn/scripts && chmod 700 /opt/gravitas-vpn'
-          sshpass -e scp ${SSH_OPTS} scripts/setup_xray.sh scripts/manage_xray_user.sh root@"${HOST}":/opt/gravitas-vpn/scripts/
+          sshpass -e ssh ${SSH_OPTS} root@"${HOST}" 'mkdir -p /opt/gravitas-vpn/scripts /opt/gravitas-vpn/panel && chmod 700 /opt/gravitas-vpn'
+          sshpass -e scp ${SSH_OPTS} scripts/setup_xray.sh scripts/manage_xray_user.sh scripts/enable_xray_stats.sh scripts/setup_panel.sh root@"${HOST}":/opt/gravitas-vpn/scripts/
+          sshpass -e scp ${SSH_OPTS} panel/app.py root@"${HOST}":/opt/gravitas-vpn/panel/app.py
 
       - name: Configure Xray VLESS Reality
         shell: bash
@@ -56,7 +58,21 @@ jobs:
           SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3'
           sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "chmod 700 /opt/gravitas-vpn/scripts/*.sh && /opt/gravitas-vpn/scripts/setup_xray.sh '${HOST}'"
 
-      - name: Verify Xray server state
+      - name: Enable Xray traffic statistics
+        shell: bash
+        run: |
+          set -euo pipefail
+          SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15'
+          sshpass -e ssh ${SSH_OPTS} root@"${HOST}" '/opt/gravitas-vpn/scripts/enable_xray_stats.sh'
+
+      - name: Install monitoring panel
+        shell: bash
+        run: |
+          set -euo pipefail
+          SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3'
+          sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "/opt/gravitas-vpn/scripts/setup_panel.sh '${HOST}'"
+
+      - name: Verify Xray and panel state
         shell: bash
         run: |
           set -euo pipefail
@@ -64,14 +80,19 @@ jobs:
           sshpass -e ssh ${SSH_OPTS} root@"${HOST}" '
             set -e
             systemctl is-active --quiet xray
+            systemctl is-active --quiet gravitas-panel
             /usr/local/bin/xray run -test -config /usr/local/etc/xray/config.json
+            /usr/local/bin/xray api statsquery --server=127.0.0.1:10085 -pattern "user>>>" >/dev/null
             test -s /etc/gravitas-xray/port
+            test -s /etc/gravitas-panel/admin_password
             for user in hossein kiarash ahmad ehsan sajjad; do
               test -s "/root/gravitas-vpn/xray-clients/${user}.vless.txt"
               test -s "/root/gravitas-vpn/xray-clients/${user}.png"
               test -s "/root/gravitas-vpn/xray-clients/${user}.json"
             done
-            echo "Xray is active and all five Gravitas client profiles exist on the server."
+            PANEL_PASS="$(cat /etc/gravitas-panel/admin_password)"
+            curl -ksSf -u "admin:${PANEL_PASS}" https://127.0.0.1:9443/api/data | jq -e '.system.panel_active == true and .system.xray_active == true' >/dev/null
+            echo "Xray stats and Gravitas monitoring panel are healthy."
           '
 
       - name: Test public TCP reachability
@@ -82,7 +103,8 @@ jobs:
           PORT="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" 'cat /etc/gravitas-xray/port')"
           [[ "$PORT" =~ ^[0-9]+$ ]] || { echo 'Invalid Xray port returned by server.' >&2; exit 1; }
           nc -zvw 8 "${HOST}" "${PORT}"
-          echo "External TCP reachability to Xray succeeded on port ${PORT}."
+          nc -zvw 8 "${HOST}" 9443
+          echo "External reachability succeeded for Xray ${PORT}/tcp and panel 9443/tcp."
 
       - name: Collect team client bundle
         shell: bash
@@ -97,10 +119,27 @@ jobs:
           done
           chmod -R go-rwx gravitas-xray-clients
 
+      - name: Collect panel credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15'
+          mkdir -p gravitas-panel-access
+          sshpass -e scp ${SSH_OPTS} root@"${HOST}":/etc/gravitas-panel/credentials.txt gravitas-panel-access/
+          chmod -R go-rwx gravitas-panel-access
+
       - name: Upload short-lived team bundle
         uses: actions/upload-artifact@v4
         with:
           name: gravitas-xray-clients
           path: gravitas-xray-clients/
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload short-lived panel access
+        uses: actions/upload-artifact@v4
+        with:
+          name: gravitas-panel-access
+          path: gravitas-panel-access/
           if-no-files-found: error
           retention-days: 1
