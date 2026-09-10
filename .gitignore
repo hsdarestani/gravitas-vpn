@@ -1,0 +1,7 @@
+*.conf
+*.key
+clients/
+secrets/
+.env
+.env.*
+!.env.example
