@@ -1,0 +1,74 @@
+name: Deploy Gravitas VPN
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/**'
+      - '.github/workflows/deploy.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gravitas-vpn-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HOST: ${{ secrets.HOST }}
+      SSHPASS: ${{ secrets.PASS }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate deployment secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${HOST:-}" ]] || { echo 'Missing GitHub secret: HOST'; exit 1; }
+          [[ -n "${SSHPASS:-}" ]] || { echo 'Missing GitHub secret: PASS'; exit 1; }
+
+      - name: Install SSH password client
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y sshpass
+
+      - name: Copy deployment scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3'
+          sshpass -e ssh ${SSH_OPTS} root@"${HOST}" 'mkdir -p /opt/gravitas-vpn/scripts && chmod 700 /opt/gravitas-vpn'
+          sshpass -e scp ${SSH_OPTS} scripts/setup_wireguard.sh scripts/manage_peer.sh root@"${HOST}":/opt/gravitas-vpn/scripts/
+
+      - name: Configure WireGuard
+        shell: bash
+        run: |
+          set -euo pipefail
+          SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3'
+          sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "chmod 700 /opt/gravitas-vpn/scripts/*.sh && /opt/gravitas-vpn/scripts/setup_wireguard.sh '${HOST}'"
+
+      - name: Verify server state
+        shell: bash
+        run: |
+          set -euo pipefail
+          SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15'
+          sshpass -e ssh ${SSH_OPTS} root@"${HOST}" '
+            set -e
+            systemctl is-active --quiet wg-quick@wg0
+            test "$(sysctl -n net.ipv4.ip_forward)" = "1"
+            test -s /root/gravitas-vpn/clients/hossein.conf
+            test -s /root/gravitas-vpn/clients/kiarash.conf
+            test -s /root/gravitas-vpn/clients/ahmad.conf
+            test -s /root/gravitas-vpn/clients/ehsan.conf
+            echo "WireGuard service is active and all four Gravitas client configs exist on the server."
+            wg show wg0 | sed -E "s/(public key: ).*/\1[present]/; s/(preshared key: ).*/\1[present]/"
+          '
