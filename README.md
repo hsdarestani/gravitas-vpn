@@ -1,57 +1,84 @@
 # Gravitas Team VPN
 
-Private team VPN infrastructure for Gravitas, based on WireGuard.
+Primary team proxy infrastructure for Gravitas, based on **Xray VLESS + REALITY**. The previous WireGuard installation is intentionally left untouched as a fallback.
 
-## Security model
+## Why this setup
 
-- Client private keys are generated **on the VPN server**.
-- Client configs are stored only under `/root/gravitas-vpn/clients/` with restrictive permissions.
-- No WireGuard private keys or client configs are committed to GitHub.
-- Each team member gets a separate peer, so access can be revoked independently.
-
-> Important: keep this repository private before using GitHub Actions artifacts or any workflow that exports client configs. The current deployment workflow intentionally does **not** upload configs as artifacts.
+- Works with common V2Ray clients such as v2rayN and v2rayNG.
+- No domain or TLS certificate is required because REALITY is used.
+- Each team member has a separate VLESS UUID and can be revoked independently.
+- Client secrets are generated on the VPN server and are not committed to GitHub.
+- The deploy script automatically selects the first free preferred TCP port: `443`, `8443`, `2053`, `2083`, then `9443`.
 
 ## Required GitHub Actions secrets
 
 - `HOST` — VPN server IPv4 address or hostname
 - `PASS` — root SSH password
 
-## Default peers
+## Default users
 
 - `hossein`
 - `kiarash`
 - `ahmad`
 - `ehsan`
 
-## Server paths
+## Xray server paths
 
-- WireGuard interface: `wg0`
-- Server config: `/etc/wireguard/wg0.conf`
-- State: `/etc/wireguard/gravitas/`
-- Client configs: `/root/gravitas-vpn/clients/`
-- Management command: `/usr/local/sbin/gravitas-vpn-peer`
+- Xray config: `/usr/local/etc/xray/config.json`
+- Xray state: `/etc/gravitas-xray/`
+- Client share links and QR images: `/root/gravitas-vpn/xray-clients/`
+- User management command: `/usr/local/sbin/gravitas-xray-user`
 
-## Retrieve a client config securely
+For every active member the server creates:
 
-From an authorized machine, copy a config directly over SSH/SCP. Example:
+- `<name>.vless.txt` — one-click VLESS import link
+- `<name>.png` — QR code for mobile clients
+- `<name>.json` — native Xray client config
+
+## Client usage
+
+### Android — v2rayNG
+
+1. Install/open v2rayNG.
+2. Use `Import config from Clipboard` after copying the member's `.vless.txt` link, or scan the member's QR code.
+3. Select the imported `Gravitas-<name>` profile.
+4. Connect.
+
+### Windows — v2rayN
+
+1. Install/open v2rayN.
+2. Copy the member's `.vless.txt` link.
+3. Use `Import share links from clipboard`.
+4. Select the imported `Gravitas-<name>` profile and enable the system proxy/TUN mode as desired.
+
+## Retrieve a client securely
+
+Copy files directly over SSH/SCP from an authorized machine, for example:
 
 ```bash
-scp root@YOUR_SERVER:/root/gravitas-vpn/clients/hossein.conf .
+scp root@YOUR_SERVER:/root/gravitas-vpn/xray-clients/kiarash.vless.txt .
+scp root@YOUR_SERVER:/root/gravitas-vpn/xray-clients/kiarash.png .
 ```
 
-To show a QR code while logged in to the server:
+To print a member's link or terminal QR while logged into the server:
 
 ```bash
-qrencode -t ansiutf8 < /root/gravitas-vpn/clients/hossein.conf
+gravitas-xray-user show kiarash
+gravitas-xray-user qr kiarash
 ```
 
-## Peer management
+## User management
 
 ```bash
-sudo gravitas-vpn-peer list
-sudo gravitas-vpn-peer add new-member
-sudo gravitas-vpn-peer revoke new-member
-sudo gravitas-vpn-peer show new-member
+gravitas-xray-user list
+gravitas-xray-user add new-member
+gravitas-xray-user revoke new-member
+gravitas-xray-user show new-member
+gravitas-xray-user qr new-member
 ```
 
-`show` prints a sensitive client configuration. Only use it in a trusted SSH session.
+Revoking a user disables that UUID and removes its generated share files. Re-adding the same name re-enables its existing UUID unless the state file itself is deleted.
+
+## WireGuard fallback
+
+The earlier WireGuard service/config remains on the server as a fallback and is not removed by the Xray deployment.
