@@ -91,7 +91,9 @@ jobs:
               test -s "/root/gravitas-vpn/xray-clients/${user}.json"
             done
             PANEL_PASS="$(cat /etc/gravitas-panel/admin_password)"
-            curl -ksSf -u "admin:${PANEL_PASS}" https://127.0.0.1:9443/api/data | jq -e '.system.panel_active == true and .system.xray_active == true' >/dev/null
+            PANEL_JSON="$(curl -ksSf -u "admin:${PANEL_PASS}" https://127.0.0.1:9443/api/data)"
+            printf "%s" "$PANEL_JSON" | jq -e ".system.panel_active == true and .system.xray_active == true and (.users | length == 5)" >/dev/null
+            test "$(printf "%s" "$PANEL_JSON" | jq -r .collector_error)" = ""
             echo "Xray stats and Gravitas monitoring panel are healthy."
           '
 
