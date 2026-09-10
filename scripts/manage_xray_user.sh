@@ -5,6 +5,7 @@ STATE_DIR="/etc/gravitas-xray"
 USER_DIR="$STATE_DIR/users"
 CLIENT_DIR="/root/gravitas-vpn/xray-clients"
 SETUP="/opt/gravitas-vpn/scripts/setup_xray.sh"
+STATS_SETUP="/opt/gravitas-vpn/scripts/enable_xray_stats.sh"
 XRAY_BIN="$(command -v xray || echo /usr/local/bin/xray)"
 
 usage() {
@@ -28,6 +29,11 @@ validate_name() {
 rerender() {
   [[ -s "$STATE_DIR/host" ]] || { echo "Missing saved host." >&2; exit 1; }
   "$SETUP" "$(cat "$STATE_DIR/host")" >/dev/null
+  # setup_xray.sh intentionally owns the base VLESS configuration. Re-apply the
+  # local StatsService after a user add/revoke so monitoring keeps working.
+  if [[ -x "$STATS_SETUP" ]]; then
+    "$STATS_SETUP" >/dev/null
+  fi
 }
 
 cmd="${1:-}"
