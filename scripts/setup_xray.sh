@@ -6,7 +6,7 @@ STATE_DIR="/etc/gravitas-xray"
 USER_DIR="$STATE_DIR/users"
 CLIENT_DIR="/root/gravitas-vpn/xray-clients"
 XRAY_CONFIG="/usr/local/etc/xray/config.json"
-DEFAULT_USERS=(hossein kiarash ahmad ehsan)
+DEFAULT_USERS=(hossein kiarash ahmad ehsan sajjad)
 SERVER_NAME="speed.cloudflare.com"
 
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
