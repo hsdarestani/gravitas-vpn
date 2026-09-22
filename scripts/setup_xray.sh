@@ -8,6 +8,7 @@ CLIENT_DIR="/root/gravitas-vpn/xray-clients"
 XRAY_CONFIG="/usr/local/etc/xray/config.json"
 DEFAULT_USERS=(hossein kiarash ahmad ehsan sajjad)
 SERVER_NAME="speed.cloudflare.com"
+FALLBACK_SERVER_NAME="www.microsoft.com"
 
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   echo "Run as root." >&2
@@ -118,6 +119,7 @@ jq -n \
   --argjson fallbackPort "$FALLBACK_PORT" \
   --argjson clients "$clients" \
   --arg sni "$SERVER_NAME" \
+  --arg fallbackSni "$FALLBACK_SERVER_NAME" \
   --arg privateKey "$PRIVATE_KEY" \
   --arg shortId "$SHORT_ID" \
   '{
@@ -154,9 +156,9 @@ jq -n \
           security:"reality",
           realitySettings:{
             show:false,
-            dest:($sni + ":443"),
+            dest:($fallbackSni + ":443"),
             xver:0,
-            serverNames:[$sni],
+            serverNames:[$fallbackSni],
             privateKey:$privateKey,
             shortIds:[$shortId]
           }
@@ -206,7 +208,7 @@ for uuid_file in "$USER_DIR"/*.uuid; do
   printf '%s\n' "$uri" > "$CLIENT_DIR/$user.vless.txt"
   qrencode -o "$CLIENT_DIR/$user.png" -s 7 -m 2 "$uri"
 
-  fallback_uri="vless://${uuid}@${HOST}:${FALLBACK_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SERVER_NAME}&fp=chrome&pbk=${REALITY_PASSWORD}&sid=${SHORT_ID}&spx=%2F&type=tcp&headerType=none#Gravitas-${user}-fallback"
+  fallback_uri="vless://${uuid}@${HOST}:${FALLBACK_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${FALLBACK_SERVER_NAME}&fp=chrome&pbk=${REALITY_PASSWORD}&sid=${SHORT_ID}&spx=%2F&type=tcp&headerType=none#Gravitas-${user}-fallback"
   printf '%s\n' "$fallback_uri" > "$CLIENT_DIR/$user-fallback.vless.txt"
   qrencode -o "$CLIENT_DIR/$user-fallback.png" -s 7 -m 2 "$fallback_uri"
 
@@ -238,8 +240,8 @@ for uuid_file in "$USER_DIR"/*.uuid; do
       }]
     }' > "$CLIENT_DIR/$user.json"
 
-  jq --argjson fallbackPort "$FALLBACK_PORT" \
-    '.outbounds[0].settings.port = $fallbackPort' \
+  jq --argjson fallbackPort "$FALLBACK_PORT" --arg fallbackSni "$FALLBACK_SERVER_NAME" \
+    '.outbounds[0].settings.port = $fallbackPort | .outbounds[0].streamSettings.realitySettings.serverName = $fallbackSni' \
     "$CLIENT_DIR/$user.json" > "$CLIENT_DIR/$user-fallback.json"
 done
 chmod 600 "$CLIENT_DIR"/* 2>/dev/null || true
