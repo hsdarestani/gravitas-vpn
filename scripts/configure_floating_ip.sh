@@ -25,6 +25,29 @@ chmod 600 "$STATE_DIR/egress-ip" "$STATE_DIR/egress-interface"
 # Apply immediately without restarting the primary network connection.
 ip address replace "$FLOATING_IP/32" dev "$IFACE"
 
+# Older Gravitas WireGuard setup installed a broad MASQUERADE rule that rewrote
+# every outbound source IP to the server primary address. Remove only that exact
+# legacy rule, keep WireGuard NAT scoped to its own client subnet, and patch the
+# persistent wg0 config so a later WireGuard restart cannot bring it back.
+if command -v iptables >/dev/null 2>&1; then
+  while iptables -t nat -C POSTROUTING -o "$IFACE" -j MASQUERADE 2>/dev/null; do
+    iptables -t nat -D POSTROUTING -o "$IFACE" -j MASQUERADE
+  done
+
+  if ip link show wg0 >/dev/null 2>&1; then
+    if ! iptables -t nat -C POSTROUTING -s 10.77.0.0/24 -o "$IFACE" -j MASQUERADE 2>/dev/null; then
+      iptables -t nat -A POSTROUTING -s 10.77.0.0/24 -o "$IFACE" -j MASQUERADE
+    fi
+  fi
+fi
+
+if [[ -f /etc/wireguard/wg0.conf ]]; then
+  sed -i \
+    -e "s|iptables -t nat -A POSTROUTING -o $IFACE -j MASQUERADE|iptables -t nat -A POSTROUTING -s 10.77.0.0/24 -o $IFACE -j MASQUERADE|g" \
+    -e "s|iptables -t nat -D POSTROUTING -o $IFACE -j MASQUERADE|iptables -t nat -D POSTROUTING -s 10.77.0.0/24 -o $IFACE -j MASQUERADE|g" \
+    /etc/wireguard/wg0.conf
+fi
+
 cat > /usr/local/sbin/gravitas-floating-ip <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
