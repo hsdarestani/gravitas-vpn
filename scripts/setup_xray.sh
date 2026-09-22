@@ -8,7 +8,8 @@ CLIENT_DIR="/root/gravitas-vpn/xray-clients"
 XRAY_CONFIG="/usr/local/etc/xray/config.json"
 DEFAULT_USERS=(hossein kiarash ahmad ehsan sajjad)
 SERVER_NAME="speed.cloudflare.com"
-FALLBACK_SERVER_NAME="www.microsoft.com"
+FALLBACK_SERVER_NAME=""
+FALLBACK_DEST="1.1.1.1:443"
 
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   echo "Run as root." >&2
@@ -120,6 +121,7 @@ jq -n \
   --argjson clients "$clients" \
   --arg sni "$SERVER_NAME" \
   --arg fallbackSni "$FALLBACK_SERVER_NAME" \
+  --arg fallbackDest "$FALLBACK_DEST" \
   --arg privateKey "$PRIVATE_KEY" \
   --arg shortId "$SHORT_ID" \
   '{
@@ -156,9 +158,9 @@ jq -n \
           security:"reality",
           realitySettings:{
             show:false,
-            dest:($fallbackSni + ":443"),
+            dest:$fallbackDest,
             xver:0,
-            serverNames:[$fallbackSni],
+            serverNames:[""],
             privateKey:$privateKey,
             shortIds:[$shortId]
           }
@@ -208,7 +210,7 @@ for uuid_file in "$USER_DIR"/*.uuid; do
   printf '%s\n' "$uri" > "$CLIENT_DIR/$user.vless.txt"
   qrencode -o "$CLIENT_DIR/$user.png" -s 7 -m 2 "$uri"
 
-  fallback_uri="vless://${uuid}@${HOST}:${FALLBACK_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${FALLBACK_SERVER_NAME}&fp=chrome&pbk=${REALITY_PASSWORD}&sid=${SHORT_ID}&spx=%2F&type=tcp&headerType=none#Gravitas-${user}-fallback"
+  fallback_uri="vless://${uuid}@${HOST}:${FALLBACK_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&fp=chrome&pbk=${REALITY_PASSWORD}&sid=${SHORT_ID}&spx=%2F&type=tcp&headerType=none#Gravitas-${user}-iran-fallback"
   printf '%s\n' "$fallback_uri" > "$CLIENT_DIR/$user-fallback.vless.txt"
   qrencode -o "$CLIENT_DIR/$user-fallback.png" -s 7 -m 2 "$fallback_uri"
 
