@@ -89,6 +89,9 @@ jobs:
               test -s "/root/gravitas-vpn/xray-clients/${user}.vless.txt"
               test -s "/root/gravitas-vpn/xray-clients/${user}.png"
               test -s "/root/gravitas-vpn/xray-clients/${user}.json"
+              test -s "/root/gravitas-vpn/xray-clients/${user}-fallback.vless.txt"
+              test -s "/root/gravitas-vpn/xray-clients/${user}-fallback.png"
+              test -s "/root/gravitas-vpn/xray-clients/${user}-fallback.json"
             done
             PANEL_PASS="$(cat /etc/gravitas-panel/admin_password)"
             PANEL_JSON="$(curl -ksSf -u "admin:${PANEL_PASS}" https://127.0.0.1:9443/api/data)"
@@ -103,10 +106,13 @@ jobs:
           set -euo pipefail
           SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15'
           PORT="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" 'cat /etc/gravitas-xray/port')"
+          FALLBACK_PORT="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" 'cat /etc/gravitas-xray/fallback-port')"
           [[ "$PORT" =~ ^[0-9]+$ ]] || { echo 'Invalid Xray port returned by server.' >&2; exit 1; }
+          [[ "$FALLBACK_PORT" =~ ^[0-9]+$ ]] || { echo 'Invalid fallback Xray port returned by server.' >&2; exit 1; }
           nc -zvw 8 "${HOST}" "${PORT}"
+          nc -zvw 8 "${HOST}" "${FALLBACK_PORT}"
           nc -zvw 8 "${HOST}" 9443
-          echo "External reachability succeeded for Xray ${PORT}/tcp and panel 9443/tcp."
+          echo "External reachability succeeded for Xray ${PORT}/tcp, fallback ${FALLBACK_PORT}/tcp and panel 9443/tcp."
 
       - name: End-to-end VLESS REALITY smoke test
         shell: bash
@@ -114,37 +120,49 @@ jobs:
           set -euo pipefail
           SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15'
           sudo bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
-          sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/xray-clients/hossein.json /tmp/gravitas-smoke.json
-          chmod 600 /tmp/gravitas-smoke.json
+          sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/xray-clients/hossein.json /tmp/gravitas-primary.json
+          sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/xray-clients/hossein-fallback.json /tmp/gravitas-fallback.json
+          chmod 600 /tmp/gravitas-primary.json /tmp/gravitas-fallback.json
 
           SERVER_EGRESS_V4="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "curl -4 -fsS --max-time 15 https://www.cloudflare.com/cdn-cgi/trace | sed -n 's/^ip=//p' | head -n1")"
           SERVER_EGRESS_V6="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "curl -6 -fsS --max-time 15 https://www.cloudflare.com/cdn-cgi/trace | sed -n 's/^ip=//p' | head -n1" || true)"
           [[ -n "${SERVER_EGRESS_V4}" || -n "${SERVER_EGRESS_V6}" ]] || { echo 'Could not determine server egress IP.' >&2; exit 1; }
 
-          /usr/local/bin/xray run -config /tmp/gravitas-smoke.json >/tmp/gravitas-smoke.log 2>&1 &
-          XRAY_PID=$!
-          cleanup() {
+          test_tunnel() {
+            local cfg="$1"
+            local label="$2"
+            rm -f /tmp/gravitas-smoke.trace /tmp/gravitas-smoke.log
+
+            /usr/local/bin/xray run -config "$cfg" >/tmp/gravitas-smoke.log 2>&1 &
+            XRAY_PID=$!
+
+            for _ in {1..30}; do
+              if nc -z 127.0.0.1 10808 >/dev/null 2>&1; then break; fi
+              sleep 0.3
+            done
+            nc -z 127.0.0.1 10808
+
+            if ! curl -4 -fsS --max-time 20 --socks5-hostname 127.0.0.1:10808 https://www.cloudflare.com/cdn-cgi/trace >/tmp/gravitas-smoke.trace; then
+              echo "${label} VLESS/REALITY tunnel request failed." >&2
+              sed -E 's/(id|password|publicKey|privateKey)[=:][^ ,}]*/\1=REDACTED/g' /tmp/gravitas-smoke.log >&2 || true
+              kill "${XRAY_PID}" 2>/dev/null || true
+              wait "${XRAY_PID}" 2>/dev/null || true
+              return 1
+            fi
+
+            TUNNEL_EGRESS="$(awk -F= '/^ip=/{print $2; exit}' /tmp/gravitas-smoke.trace)"
             kill "${XRAY_PID}" 2>/dev/null || true
-            rm -f /tmp/gravitas-smoke.json /tmp/gravitas-smoke.trace
+            wait "${XRAY_PID}" 2>/dev/null || true
+
+            [[ -n "${TUNNEL_EGRESS}" ]] || { echo "${label}: no tunnel egress IP returned." >&2; return 1; }
+            if [[ "${TUNNEL_EGRESS}" != "${SERVER_EGRESS_V4}" && "${TUNNEL_EGRESS}" != "${SERVER_EGRESS_V6}" ]]; then
+              echo "${label}: tunnel egress did not match server egress." >&2
+              return 1
+            fi
+            echo "${label} VLESS/REALITY tunnel succeeded."
           }
-          trap cleanup EXIT
 
-          for _ in {1..30}; do
-            if nc -z 127.0.0.1 10808 >/dev/null 2>&1; then break; fi
-            sleep 0.3
-          done
-          nc -z 127.0.0.1 10808
-
-          if ! curl -4 -fsS --max-time 20 --socks5-hostname 127.0.0.1:10808 https://www.cloudflare.com/cdn-cgi/trace >/tmp/gravitas-smoke.trace; then
-            echo 'VLESS/REALITY tunnel request failed. Xray client log:' >&2
-            sed -E 's/(id|password|publicKey|privateKey)[=:][^ ,}]*/\\1=REDACTED/g' /tmp/gravitas-smoke.log >&2 || true
-            exit 1
-          fi
-
-          TUNNEL_EGRESS="$(awk -F= '/^ip=/{print $2; exit}' /tmp/gravitas-smoke.trace)"
-          [[ -n "${TUNNEL_EGRESS}" ]] || { echo 'Tunnel connected but no egress IP was returned.' >&2; exit 1; }
-          if [[ "${TUNNEL_EGRESS}" != "${SERVER_EGRESS_V4}" && "${TUNNEL_EGRESS}" != "${SERVER_EGRESS_V6}" ]]; then
-            echo "Tunnel egress did not match the server IPv4/IPv6 egress." >&2
-            exit 1
-          fi
-          echo "End-to-end VLESS/REALITY tunnel succeeded through the Gravitas server."
+          trap 'pkill -f "/usr/local/bin/xray run -config /tmp/gravitas-" 2>/dev/null || true; rm -f /tmp/gravitas-*.json /tmp/gravitas-smoke.*' EXIT
+          test_tunnel /tmp/gravitas-primary.json "Primary"
+          test_tunnel /tmp/gravitas-fallback.json "Fallback"
+          echo "Both Gravitas REALITY paths passed end-to-end validation."
