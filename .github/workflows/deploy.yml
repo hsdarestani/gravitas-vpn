@@ -117,8 +117,9 @@ jobs:
           sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/xray-clients/hossein.json /tmp/gravitas-smoke.json
           chmod 600 /tmp/gravitas-smoke.json
 
-          SERVER_EGRESS="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "curl -4 -fsS --max-time 15 https://www.cloudflare.com/cdn-cgi/trace | sed -n 's/^ip=//p' | head -n1")"
-          [[ -n "${SERVER_EGRESS}" ]] || { echo 'Could not determine server egress IP.' >&2; exit 1; }
+          SERVER_EGRESS_V4="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "curl -4 -fsS --max-time 15 https://www.cloudflare.com/cdn-cgi/trace | sed -n 's/^ip=//p' | head -n1")"
+          SERVER_EGRESS_V6="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "curl -6 -fsS --max-time 15 https://www.cloudflare.com/cdn-cgi/trace | sed -n 's/^ip=//p' | head -n1" || true)"
+          [[ -n "${SERVER_EGRESS_V4}" || -n "${SERVER_EGRESS_V6}" ]] || { echo 'Could not determine server egress IP.' >&2; exit 1; }
 
           /usr/local/bin/xray run -config /tmp/gravitas-smoke.json >/tmp/gravitas-smoke.log 2>&1 &
           XRAY_PID=$!
@@ -142,11 +143,11 @@ jobs:
 
           TUNNEL_EGRESS="$(awk -F= '/^ip=/{print $2; exit}' /tmp/gravitas-smoke.trace)"
           [[ -n "${TUNNEL_EGRESS}" ]] || { echo 'Tunnel connected but no egress IP was returned.' >&2; exit 1; }
-          [[ "${TUNNEL_EGRESS}" == "${SERVER_EGRESS}" ]] || {
-            echo "Tunnel egress mismatch: server=${SERVER_EGRESS}, tunnel=${TUNNEL_EGRESS}" >&2
+          if [[ "${TUNNEL_EGRESS}" != "${SERVER_EGRESS_V4}" && "${TUNNEL_EGRESS}" != "${SERVER_EGRESS_V6}" ]]; then
+            echo "Tunnel egress did not match the server IPv4/IPv6 egress." >&2
             exit 1
-          }
-          echo "End-to-end VLESS/REALITY tunnel succeeded via server egress ${TUNNEL_EGRESS}."
+          fi
+          echo "End-to-end VLESS/REALITY tunnel succeeded through the Gravitas server."
 
       - name: Collect team client bundle
         shell: bash
