@@ -6,6 +6,7 @@ STATE_DIR="/etc/gravitas-xray"
 USER_DIR="$STATE_DIR/users"
 CLIENT_DIR="/root/gravitas-vpn/xray-clients"
 XRAY_CONFIG="/usr/local/etc/xray/config.json"
+EGRESS_IP=""
 DEFAULT_USERS=(hossein kiarash ahmad ehsan sajjad)
 SERVER_NAME="speed.cloudflare.com"
 FALLBACK_SERVER_NAME=""
@@ -114,6 +115,14 @@ done
 
 [[ "$(jq 'length' <<<"$clients")" -gt 0 ]] || { echo "No enabled Xray users." >&2; exit 1; }
 
+if [[ -s "$STATE_DIR/egress-ip" ]]; then
+  EGRESS_IP="$(tr -d '\\r\\n' < "$STATE_DIR/egress-ip")"
+  ip -4 addr show | grep -F "$EGRESS_IP/32" >/dev/null || {
+    echo "Configured egress IP $EGRESS_IP is not present on the server." >&2
+    exit 1
+  }
+fi
+
 mkdir -p "$(dirname "$XRAY_CONFIG")"
 jq -n \
   --argjson port "$PORT" \
@@ -124,6 +133,7 @@ jq -n \
   --arg fallbackDest "$FALLBACK_DEST" \
   --arg privateKey "$PRIVATE_KEY" \
   --arg shortId "$SHORT_ID" \
+  --arg egressIp "$EGRESS_IP" \
   '{
     log: {loglevel:"warning"},
     inbounds: [
@@ -169,7 +179,10 @@ jq -n \
       }
     ],
     outbounds:[
-      {protocol:"freedom", tag:"direct"},
+      ({protocol:"freedom", tag:"direct"} +
+        (if $egressIp != "" then
+          {sendThrough:$egressIp, streamSettings:{sockopt:{domainStrategy:"UseIPv4"}}}
+        else {} end)),
       {protocol:"blackhole", tag:"block"}
     ],
     routing:{
