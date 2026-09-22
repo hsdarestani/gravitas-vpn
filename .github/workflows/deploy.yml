@@ -48,8 +48,15 @@ jobs:
           set -euo pipefail
           SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3'
           sshpass -e ssh ${SSH_OPTS} root@"${HOST}" 'mkdir -p /opt/gravitas-vpn/scripts /opt/gravitas-vpn/panel && chmod 700 /opt/gravitas-vpn'
-          sshpass -e scp ${SSH_OPTS} scripts/setup_xray.sh scripts/manage_xray_user.sh scripts/enable_xray_stats.sh scripts/setup_panel.sh root@"${HOST}":/opt/gravitas-vpn/scripts/
+          sshpass -e scp ${SSH_OPTS} scripts/setup_xray.sh scripts/manage_xray_user.sh scripts/enable_xray_stats.sh scripts/setup_panel.sh scripts/configure_floating_ip.sh root@"${HOST}":/opt/gravitas-vpn/scripts/
           sshpass -e scp ${SSH_OPTS} panel/app.py root@"${HOST}":/opt/gravitas-vpn/panel/app.py
+
+      - name: Configure Hetzner Floating IP
+        shell: bash
+        run: |
+          set -euo pipefail
+          SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3'
+          sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "chmod 700 /opt/gravitas-vpn/scripts/configure_floating_ip.sh && /opt/gravitas-vpn/scripts/configure_floating_ip.sh '167.233.182.94'"
 
       - name: Configure Xray VLESS Reality
         shell: bash
@@ -124,9 +131,8 @@ jobs:
           sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/xray-clients/hossein-fallback.json /tmp/gravitas-fallback.json
           chmod 600 /tmp/gravitas-primary.json /tmp/gravitas-fallback.json
 
-          SERVER_EGRESS_V4="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "curl -4 -fsS --max-time 15 https://www.cloudflare.com/cdn-cgi/trace | sed -n 's/^ip=//p' | head -n1")"
-          SERVER_EGRESS_V6="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "curl -6 -fsS --max-time 15 https://www.cloudflare.com/cdn-cgi/trace | sed -n 's/^ip=//p' | head -n1" || true)"
-          [[ -n "${SERVER_EGRESS_V4}" || -n "${SERVER_EGRESS_V6}" ]] || { echo 'Could not determine server egress IP.' >&2; exit 1; }
+          EXPECTED_EGRESS="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" 'cat /etc/gravitas-xray/egress-ip')"
+          [[ "${EXPECTED_EGRESS}" == "167.233.182.94" ]] || { echo "Unexpected configured VPN egress IP: ${EXPECTED_EGRESS}" >&2; exit 1; }
 
           test_tunnel() {
             local cfg="$1"
@@ -155,11 +161,11 @@ jobs:
             wait "${XRAY_PID}" 2>/dev/null || true
 
             [[ -n "${TUNNEL_EGRESS}" ]] || { echo "${label}: no tunnel egress IP returned." >&2; return 1; }
-            if [[ "${TUNNEL_EGRESS}" != "${SERVER_EGRESS_V4}" && "${TUNNEL_EGRESS}" != "${SERVER_EGRESS_V6}" ]]; then
-              echo "${label}: tunnel egress did not match server egress." >&2
+            if [[ "${TUNNEL_EGRESS}" != "${EXPECTED_EGRESS}" ]]; then
+              echo "${label}: tunnel egress was ${TUNNEL_EGRESS}, expected Floating IP ${EXPECTED_EGRESS}." >&2
               return 1
             fi
-            echo "${label} VLESS/REALITY tunnel succeeded."
+            echo "${label} VLESS/REALITY tunnel succeeded through Floating IP ${EXPECTED_EGRESS}."
           }
 
           trap 'pkill -f "/usr/local/bin/xray run -config /tmp/gravitas-" 2>/dev/null || true; rm -f /tmp/gravitas-*.json /tmp/gravitas-smoke.*' EXIT
