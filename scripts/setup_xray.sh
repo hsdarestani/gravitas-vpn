@@ -52,6 +52,23 @@ fi
 PORT="$(cat "$STATE_DIR/port")"
 chmod 600 "$STATE_DIR/port"
 
+# Keep a second REALITY listener for networks where the primary 443 path is
+# filtered or degraded. Persist the selected port so client configs stay stable.
+if [[ ! -s "$STATE_DIR/fallback-port" ]]; then
+  fallback_selected=""
+  for candidate in 2053 8443 2083 9443; do
+    [[ "$candidate" == "$PORT" ]] && continue
+    if ! ss -ltnH "sport = :${candidate}" 2>/dev/null | grep -q .; then
+      fallback_selected="$candidate"
+      break
+    fi
+  done
+  [[ -n "$fallback_selected" ]] || { echo "No fallback TCP port is free." >&2; exit 1; }
+  printf '%s\n' "$fallback_selected" > "$STATE_DIR/fallback-port"
+fi
+FALLBACK_PORT="$(cat "$STATE_DIR/fallback-port")"
+chmod 600 "$STATE_DIR/fallback-port"
+
 if [[ ! -s "$STATE_DIR/reality-private" || ! -s "$STATE_DIR/reality-password" ]]; then
   key_output="$($XRAY_BIN x25519)"
   private_key="$(printf '%s\n' "$key_output" | awk -F': *' '/^(PrivateKey|Private key):/ {print $2; exit}')"
@@ -98,31 +115,55 @@ done
 mkdir -p "$(dirname "$XRAY_CONFIG")"
 jq -n \
   --argjson port "$PORT" \
+  --argjson fallbackPort "$FALLBACK_PORT" \
   --argjson clients "$clients" \
   --arg sni "$SERVER_NAME" \
   --arg privateKey "$PRIVATE_KEY" \
   --arg shortId "$SHORT_ID" \
   '{
     log: {loglevel:"warning"},
-    inbounds: [{
-      listen:"0.0.0.0",
-      port:$port,
-      protocol:"vless",
-      settings:{clients:$clients, decryption:"none"},
-      streamSettings:{
-        network:"tcp",
-        security:"reality",
-        realitySettings:{
-          show:false,
-          dest:($sni + ":443"),
-          xver:0,
-          serverNames:[$sni],
-          privateKey:$privateKey,
-          shortIds:[$shortId]
-        }
+    inbounds: [
+      {
+        tag:"vless-primary",
+        listen:"0.0.0.0",
+        port:$port,
+        protocol:"vless",
+        settings:{clients:$clients, decryption:"none"},
+        streamSettings:{
+          network:"tcp",
+          security:"reality",
+          realitySettings:{
+            show:false,
+            dest:($sni + ":443"),
+            xver:0,
+            serverNames:[$sni],
+            privateKey:$privateKey,
+            shortIds:[$shortId]
+          }
+        },
+        sniffing:{enabled:true, destOverride:["http","tls","quic"], routeOnly:true}
       },
-      sniffing:{enabled:true, destOverride:["http","tls","quic"], routeOnly:true}
-    }],
+      {
+        tag:"vless-fallback",
+        listen:"0.0.0.0",
+        port:$fallbackPort,
+        protocol:"vless",
+        settings:{clients:$clients, decryption:"none"},
+        streamSettings:{
+          network:"tcp",
+          security:"reality",
+          realitySettings:{
+            show:false,
+            dest:($sni + ":443"),
+            xver:0,
+            serverNames:[$sni],
+            privateKey:$privateKey,
+            shortIds:[$shortId]
+          }
+        },
+        sniffing:{enabled:true, destOverride:["http","tls","quic"], routeOnly:true}
+      }
+    ],
     outbounds:[
       {protocol:"freedom", tag:"direct"},
       {protocol:"blackhole", tag:"block"}
@@ -143,9 +184,11 @@ systemctl is-active --quiet xray
 # Open only the selected Xray TCP port in host firewalls when present.
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
   ufw allow "${PORT}/tcp" >/dev/null
+  ufw allow "${FALLBACK_PORT}/tcp" >/dev/null
 fi
 if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
   firewall-cmd --permanent --add-port="${PORT}/tcp" >/dev/null
+  firewall-cmd --permanent --add-port="${FALLBACK_PORT}/tcp" >/dev/null
   firewall-cmd --reload >/dev/null
 fi
 
@@ -154,13 +197,18 @@ for uuid_file in "$USER_DIR"/*.uuid; do
   [[ -e "$uuid_file" ]] || continue
   user="$(basename "$uuid_file" .uuid)"
   if [[ -e "$USER_DIR/$user.disabled" ]]; then
-    rm -f "$CLIENT_DIR/$user.vless.txt" "$CLIENT_DIR/$user.png" "$CLIENT_DIR/$user.json"
+    rm -f "$CLIENT_DIR/$user.vless.txt" "$CLIENT_DIR/$user.png" "$CLIENT_DIR/$user.json" \
+      "$CLIENT_DIR/$user-fallback.vless.txt" "$CLIENT_DIR/$user-fallback.png" "$CLIENT_DIR/$user-fallback.json"
     continue
   fi
   uuid="$(tr -d '\r\n' < "$uuid_file")"
   uri="vless://${uuid}@${HOST}:${PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SERVER_NAME}&fp=chrome&pbk=${REALITY_PASSWORD}&sid=${SHORT_ID}&spx=%2F&type=tcp&headerType=none#Gravitas-${user}"
   printf '%s\n' "$uri" > "$CLIENT_DIR/$user.vless.txt"
   qrencode -o "$CLIENT_DIR/$user.png" -s 7 -m 2 "$uri"
+
+  fallback_uri="vless://${uuid}@${HOST}:${FALLBACK_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SERVER_NAME}&fp=chrome&pbk=${REALITY_PASSWORD}&sid=${SHORT_ID}&spx=%2F&type=tcp&headerType=none#Gravitas-${user}-fallback"
+  printf '%s\n' "$fallback_uri" > "$CLIENT_DIR/$user-fallback.vless.txt"
+  qrencode -o "$CLIENT_DIR/$user-fallback.png" -s 7 -m 2 "$fallback_uri"
 
   jq -n \
     --arg host "$HOST" \
@@ -189,10 +237,14 @@ for uuid_file in "$USER_DIR"/*.uuid; do
         }
       }]
     }' > "$CLIENT_DIR/$user.json"
+
+  jq --argjson fallbackPort "$FALLBACK_PORT" \
+    '.outbounds[0].settings.port = $fallbackPort' \
+    "$CLIENT_DIR/$user.json" > "$CLIENT_DIR/$user-fallback.json"
 done
 chmod 600 "$CLIENT_DIR"/* 2>/dev/null || true
 
 install -m 700 /opt/gravitas-vpn/scripts/manage_xray_user.sh /usr/local/sbin/gravitas-xray-user
 
-printf 'Xray VLESS/REALITY active on TCP %s.\n' "$PORT"
+printf 'Xray VLESS/REALITY active on TCP %s with fallback TCP %s.\n' "$PORT" "$FALLBACK_PORT"
 printf 'Client material: %s\n' "$CLIENT_DIR"
