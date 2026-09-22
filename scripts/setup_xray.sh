@@ -7,6 +7,7 @@ USER_DIR="$STATE_DIR/users"
 CLIENT_DIR="/root/gravitas-vpn/xray-clients"
 XRAY_CONFIG="/usr/local/etc/xray/config.json"
 EGRESS_IP=""
+CLIENT_HOST=""
 DEFAULT_USERS=(hossein kiarash ahmad ehsan sajjad)
 SERVER_NAME="speed.cloudflare.com"
 FALLBACK_SERVER_NAME=""
@@ -115,8 +116,10 @@ done
 
 [[ "$(jq 'length' <<<"$clients")" -gt 0 ]] || { echo "No enabled Xray users." >&2; exit 1; }
 
+CLIENT_HOST="$HOST"
 if [[ -s "$STATE_DIR/egress-ip" ]]; then
   EGRESS_IP="$(tr -d '\\r\\n' < "$STATE_DIR/egress-ip")"
+  CLIENT_HOST="$EGRESS_IP"
   ip -4 addr show | grep -F "$EGRESS_IP/32" >/dev/null || {
     echo "Configured egress IP $EGRESS_IP is not present on the server." >&2
     exit 1
@@ -219,16 +222,16 @@ for uuid_file in "$USER_DIR"/*.uuid; do
     continue
   fi
   uuid="$(tr -d '\r\n' < "$uuid_file")"
-  uri="vless://${uuid}@${HOST}:${PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SERVER_NAME}&fp=chrome&pbk=${REALITY_PASSWORD}&sid=${SHORT_ID}&spx=%2F&type=tcp&headerType=none#Gravitas-${user}"
+  uri="vless://${uuid}@${CLIENT_HOST}:${PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SERVER_NAME}&fp=chrome&pbk=${REALITY_PASSWORD}&sid=${SHORT_ID}&spx=%2F&type=tcp&headerType=none#Gravitas-${user}"
   printf '%s\n' "$uri" > "$CLIENT_DIR/$user.vless.txt"
   qrencode -o "$CLIENT_DIR/$user.png" -s 7 -m 2 "$uri"
 
-  fallback_uri="vless://${uuid}@${HOST}:${FALLBACK_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&fp=chrome&pbk=${REALITY_PASSWORD}&sid=${SHORT_ID}&spx=%2F&type=tcp&headerType=none#Gravitas-${user}-iran-fallback"
+  fallback_uri="vless://${uuid}@${CLIENT_HOST}:${FALLBACK_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&fp=chrome&pbk=${REALITY_PASSWORD}&sid=${SHORT_ID}&spx=%2F&type=tcp&headerType=none#Gravitas-${user}-iran-fallback"
   printf '%s\n' "$fallback_uri" > "$CLIENT_DIR/$user-fallback.vless.txt"
   qrencode -o "$CLIENT_DIR/$user-fallback.png" -s 7 -m 2 "$fallback_uri"
 
   jq -n \
-    --arg host "$HOST" \
+    --arg host "$CLIENT_HOST" \
     --argjson port "$PORT" \
     --arg id "$uuid" \
     --arg sni "$SERVER_NAME" \
@@ -263,5 +266,5 @@ chmod 600 "$CLIENT_DIR"/* 2>/dev/null || true
 
 install -m 700 /opt/gravitas-vpn/scripts/manage_xray_user.sh /usr/local/sbin/gravitas-xray-user
 
-printf 'Xray VLESS/REALITY active on TCP %s with fallback TCP %s.\n' "$PORT" "$FALLBACK_PORT"
+printf 'Xray VLESS/REALITY active on %s TCP %s with fallback TCP %s.\n' "$CLIENT_HOST" "$PORT" "$FALLBACK_PORT"
 printf 'Client material: %s\n' "$CLIENT_DIR"
