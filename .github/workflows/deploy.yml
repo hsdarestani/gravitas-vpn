@@ -108,6 +108,46 @@ jobs:
           nc -zvw 8 "${HOST}" 9443
           echo "External reachability succeeded for Xray ${PORT}/tcp and panel 9443/tcp."
 
+      - name: End-to-end VLESS REALITY smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15'
+          sudo bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+          sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/xray-clients/hossein.json /tmp/gravitas-smoke.json
+          chmod 600 /tmp/gravitas-smoke.json
+
+          SERVER_EGRESS="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "curl -4 -fsS --max-time 15 https://www.cloudflare.com/cdn-cgi/trace | awk -F= '/^ip=/{print \\$2; exit}'")"
+          [[ -n "${SERVER_EGRESS}" ]] || { echo 'Could not determine server egress IP.' >&2; exit 1; }
+
+          /usr/local/bin/xray run -config /tmp/gravitas-smoke.json >/tmp/gravitas-smoke.log 2>&1 &
+          XRAY_PID=$!
+          cleanup() {
+            kill "${XRAY_PID}" 2>/dev/null || true
+            rm -f /tmp/gravitas-smoke.json /tmp/gravitas-smoke.trace
+          }
+          trap cleanup EXIT
+
+          for _ in {1..30}; do
+            if nc -z 127.0.0.1 10808 >/dev/null 2>&1; then break; fi
+            sleep 0.3
+          done
+          nc -z 127.0.0.1 10808
+
+          if ! curl -4 -fsS --max-time 20 --socks5-hostname 127.0.0.1:10808 https://www.cloudflare.com/cdn-cgi/trace >/tmp/gravitas-smoke.trace; then
+            echo 'VLESS/REALITY tunnel request failed. Xray client log:' >&2
+            sed -E 's/(id|password|publicKey|privateKey)[=:][^ ,}]*/\\1=REDACTED/g' /tmp/gravitas-smoke.log >&2 || true
+            exit 1
+          fi
+
+          TUNNEL_EGRESS="$(awk -F= '/^ip=/{print $2; exit}' /tmp/gravitas-smoke.trace)"
+          [[ -n "${TUNNEL_EGRESS}" ]] || { echo 'Tunnel connected but no egress IP was returned.' >&2; exit 1; }
+          [[ "${TUNNEL_EGRESS}" == "${SERVER_EGRESS}" ]] || {
+            echo "Tunnel egress mismatch: server=${SERVER_EGRESS}, tunnel=${TUNNEL_EGRESS}" >&2
+            exit 1
+          }
+          echo "End-to-end VLESS/REALITY tunnel succeeded via server egress ${TUNNEL_EGRESS}."
+
       - name: Collect team client bundle
         shell: bash
         run: |
