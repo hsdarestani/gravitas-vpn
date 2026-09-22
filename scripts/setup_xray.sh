@@ -158,7 +158,7 @@ for uuid_file in "$USER_DIR"/*.uuid; do
     continue
   fi
   uuid="$(tr -d '\r\n' < "$uuid_file")"
-  uri="vless://${uuid}@${HOST}:${PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SERVER_NAME}&fp=chrome&pbk=${REALITY_PASSWORD}&sid=${SHORT_ID}&type=tcp#Gravitas-${user}"
+  uri="vless://${uuid}@${HOST}:${PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${SERVER_NAME}&fp=chrome&pbk=${REALITY_PASSWORD}&sid=${SHORT_ID}&spx=%2F&type=tcp&headerType=none#Gravitas-${user}"
   printf '%s\n' "$uri" > "$CLIENT_DIR/$user.vless.txt"
   qrencode -o "$CLIENT_DIR/$user.png" -s 7 -m 2 "$uri"
 
@@ -185,7 +185,7 @@ for uuid_file in "$USER_DIR"/*.uuid; do
         streamSettings:{
           network:"tcp",
           security:"reality",
-          realitySettings:{fingerprint:"chrome",serverName:$sni,password:$password,shortId:$shortId,spiderX:"/"}
+          realitySettings:{fingerprint:"chrome",serverName:$sni,publicKey:$password,shortId:$shortId,spiderX:"/"}
         }
       }]
     }' > "$CLIENT_DIR/$user.json"
