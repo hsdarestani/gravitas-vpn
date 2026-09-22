@@ -114,12 +114,14 @@ jobs:
           SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15'
           PORT="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" 'cat /etc/gravitas-xray/port')"
           FALLBACK_PORT="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" 'cat /etc/gravitas-xray/fallback-port')"
+          VPN_ENDPOINT="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" 'cat /etc/gravitas-xray/egress-ip')"
           [[ "$PORT" =~ ^[0-9]+$ ]] || { echo 'Invalid Xray port returned by server.' >&2; exit 1; }
           [[ "$FALLBACK_PORT" =~ ^[0-9]+$ ]] || { echo 'Invalid fallback Xray port returned by server.' >&2; exit 1; }
-          nc -zvw 8 "${HOST}" "${PORT}"
-          nc -zvw 8 "${HOST}" "${FALLBACK_PORT}"
+          [[ "${VPN_ENDPOINT}" == "167.233.182.94" ]] || { echo "Unexpected VPN endpoint: ${VPN_ENDPOINT}" >&2; exit 1; }
+          nc -zvw 8 "${VPN_ENDPOINT}" "${PORT}"
+          nc -zvw 8 "${VPN_ENDPOINT}" "${FALLBACK_PORT}"
           nc -zvw 8 "${HOST}" 9443
-          echo "External reachability succeeded for Xray ${PORT}/tcp, fallback ${FALLBACK_PORT}/tcp and panel 9443/tcp."
+          echo "External reachability succeeded for Floating-IP Xray ${VPN_ENDPOINT}:${PORT}, fallback ${FALLBACK_PORT}, and panel."
 
       - name: End-to-end VLESS REALITY smoke test
         shell: bash
