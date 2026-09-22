@@ -166,22 +166,3 @@ jobs:
           test_tunnel /tmp/gravitas-primary.json "Primary"
           test_tunnel /tmp/gravitas-fallback.json "Fallback"
           echo "Both Gravitas REALITY paths passed end-to-end validation."
-
-      - name: Collect Ahmad fallback bundle
-        shell: bash
-        run: |
-          set -euo pipefail
-          SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15'
-          mkdir -p ahmad-fallback
-          for suffix in vless.txt png json; do
-            sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/xray-clients/ahmad-fallback.${suffix} ahmad-fallback/
-          done
-          chmod -R go-rwx ahmad-fallback
-
-      - name: Upload Ahmad fallback bundle
-        uses: actions/upload-artifact@v4
-        with:
-          name: ahmad-gravitas-fallback
-          path: ahmad-fallback/
-          if-no-files-found: error
-          retention-days: 1
