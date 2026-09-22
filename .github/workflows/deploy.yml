@@ -117,7 +117,7 @@ jobs:
           sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/xray-clients/hossein.json /tmp/gravitas-smoke.json
           chmod 600 /tmp/gravitas-smoke.json
 
-          SERVER_EGRESS="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "curl -4 -fsS --max-time 15 https://www.cloudflare.com/cdn-cgi/trace | awk -F= '/^ip=/{print \\$2; exit}'")"
+          SERVER_EGRESS="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "curl -4 -fsS --max-time 15 https://www.cloudflare.com/cdn-cgi/trace | sed -n 's/^ip=//p' | head -n1")"
           [[ -n "${SERVER_EGRESS}" ]] || { echo 'Could not determine server egress IP.' >&2; exit 1; }
 
           /usr/local/bin/xray run -config /tmp/gravitas-smoke.json >/tmp/gravitas-smoke.log 2>&1 &
