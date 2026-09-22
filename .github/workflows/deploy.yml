@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: gravitas-vpn-production-v2
+  group: gravitas-vpn-production-v3
   cancel-in-progress: true
 
 jobs:
