@@ -1,0 +1,41 @@
+name: Export Kiarash Gravitas VPN Client
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/export-kiarash.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      HOST: ${{ secrets.HOST }}
+      SSHPASS: ${{ secrets.PASS }}
+    steps:
+      - name: Install SSH client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y sshpass
+      - name: Collect Kiarash config
+        run: |
+          set -euo pipefail
+          SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15'
+          mkdir -p /tmp/kiarash
+          for ext in vless.txt png json; do
+            sshpass -e scp ${SSH_OPTS} root@"${HOST}":"/root/gravitas-vpn/xray-clients/kiarash.${ext}" "/tmp/kiarash/kiarash.${ext}"
+            sshpass -e scp ${SSH_OPTS} root@"${HOST}":"/root/gravitas-vpn/xray-clients/kiarash-fallback.${ext}" "/tmp/kiarash/kiarash-fallback.${ext}"
+          done
+          grep -q '167.233.182.94' /tmp/kiarash/kiarash.vless.txt
+      - name: Upload Kiarash
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiarash-gravitas-vpn
+          path: /tmp/kiarash/
+          retention-days: 1
+          if-no-files-found: error
