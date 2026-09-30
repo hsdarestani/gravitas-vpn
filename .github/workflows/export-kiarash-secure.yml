@@ -1,0 +1,97 @@
+name: Secure Kiarash VPN export
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/export-kiarash-secure.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      HOST: ${{ secrets.HOST }}
+      SSHPASS: ${{ secrets.PASS }}
+
+    steps:
+      - name: Install tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y sshpass netcat-openbsd openssl
+          sudo bash -c "$(curl -fsSL https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+
+      - name: Fetch current Kiarash profiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/kiarash
+          SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15'
+          for f in kiarash.vless.txt kiarash.png kiarash.json kiarash-fallback.vless.txt kiarash-fallback.png kiarash-fallback.json; do
+            sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/xray-clients/"${f}" /tmp/kiarash/"${f}"
+          done
+          grep -q '@167\.233\.182\.94:' /tmp/kiarash/kiarash.vless.txt
+          grep -q '@167\.233\.182\.94:' /tmp/kiarash/kiarash-fallback.vless.txt
+          echo "Current Kiarash profiles point to the Floating IP endpoint."
+
+      - name: End to end test Kiarash primary and fallback
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_cfg() {
+            local cfg="$1"
+            local label="$2"
+            /usr/local/bin/xray run -config "$cfg" >/tmp/xray-test.log 2>&1 &
+            local pid=$!
+            trap 'kill '"$pid"' 2>/dev/null || true' RETURN
+            for _ in {1..30}; do
+              nc -z 127.0.0.1 10808 >/dev/null 2>&1 && break
+              sleep 0.3
+            done
+            nc -z 127.0.0.1 10808
+            curl -4 -fsS --max-time 20 --socks5-hostname 127.0.0.1:10808 https://www.cloudflare.com/cdn-cgi/trace >/tmp/trace
+            grep -q '^ip=167\.233\.182\.94$' /tmp/trace
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            trap - RETURN
+            echo "${label} Kiarash profile passed end-to-end."
+          }
+          test_cfg /tmp/kiarash/kiarash.json Primary
+          test_cfg /tmp/kiarash/kiarash-fallback.json Fallback
+
+      - name: Encrypt Kiarash bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/public.pem <<'PEM'
+-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqFrdRdiHoUk5FE1MNkV5
+EEcqlT2rtmGElvHh1+pCCRYY96Tjq56VwE6WRHR3oYdri/MxrUtWgrbtvmuRCaD/
++dQ8+85zN9TKdMRxfspQ1/5gXYl3tOLBvsQcCLyc9Mh49vOIjMooJBbO29iXBSaE
+AYah19ifRzdaZq2TrwTShwOG3XJkLvKfRUtucYUSlNJ8vmmCHkb8kTYsIPGo+zzJ
+QlEb8ZEvtuV+rXdVdWx7sdDA7S5v0csxfg8Whhf392TACrL8lBJf2G9Rita61XSC
+ve+qbIQEfzNgw959GsG2q4GXr1QOOY8VJFe4EggCj/qRxmh5AkVxYdPSDBWR/Okn
+MQIDAQAB
+-----END PUBLIC KEY-----
+PEM
+          tar -C /tmp -czf /tmp/kiarash-current.tar.gz kiarash
+          openssl rand 32 > /tmp/session.key
+          openssl enc -aes-256-cbc -pbkdf2 -salt -in /tmp/kiarash-current.tar.gz -out /tmp/kiarash-current.enc -pass file:/tmp/session.key
+          openssl pkeyutl -encrypt -pubin -inkey /tmp/public.pem -pkeyopt rsa_padding_mode:oaep -in /tmp/session.key -out /tmp/session-key.enc
+          mkdir -p /tmp/export
+          mv /tmp/kiarash-current.enc /tmp/session-key.enc /tmp/export/
+          printf 'RSA-OAEP + AES-256-CBC PBKDF2\n' > /tmp/export/README.txt
+          rm -rf /tmp/kiarash /tmp/kiarash-current.tar.gz /tmp/session.key /tmp/public.pem
+
+      - name: Upload encrypted bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: kiarash-secure-export
+          path: /tmp/export/
+          retention-days: 1
+          if-no-files-found: error
