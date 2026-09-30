@@ -68,17 +68,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat > /tmp/public.pem <<'PEM'
------BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqFrdRdiHoUk5FE1MNkV5
-EEcqlT2rtmGElvHh1+pCCRYY96Tjq56VwE6WRHR3oYdri/MxrUtWgrbtvmuRCaD/
-+dQ8+85zN9TKdMRxfspQ1/5gXYl3tOLBvsQcCLyc9Mh49vOIjMooJBbO29iXBSaE
-AYah19ifRzdaZq2TrwTShwOG3XJkLvKfRUtucYUSlNJ8vmmCHkb8kTYsIPGo+zzJ
-QlEb8ZEvtuV+rXdVdWx7sdDA7S5v0csxfg8Whhf392TACrL8lBJf2G9Rita61XSC
-ve+qbIQEfzNgw959GsG2q4GXr1QOOY8VJFe4EggCj/qRxmh5AkVxYdPSDBWR/Okn
-MQIDAQAB
------END PUBLIC KEY-----
-PEM
+          printf '%s' 'LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUlJQklqQU5CZ2txaGtpRzl3MEJBUUVGQUFPQ0FROEFNSUlCQ2dLQ0FRRUFxRnJkUmRpSG9VazVGRTFNTmtWNQpFRWNxbFQycnRtR0VsdkhoMStwQ0NSWVk5NlRqcTU2VndFNldSSFIzb1lkcmkvTXhyVXRXZ3JidHZtdVJDYUQvCitkUTgrODV6TjlUS2RNUnhmc3BRMS81Z1hZbDN0T0xCdnNRY0NMeWM5TWg0OXZPSWpNb29KQmJPMjlpWEJTYUUKQVlhaDE5aWZSemRhWnEyVHJ3VFNod09HM1hKa0x2S2ZSVXR1Y1lVU2xOSjh2bW1DSGtiOGtUWXNJUEdvK3p6SgpRbEViOFpFdnR1VityWGRWZFd4N3NkREE3UzV2MGNzeGZnOFdoaGYzOTJUQUNyTDhsQkpmMkc5Uml0YTYxWFNDCnZlK3FiSVFFZnpOZ3c5NTlHc0cycTRHWHIxUU9PWThWSkZlNEVnZ0NqL3FSeG1oNUFrVnhZZFBTREJXUi9Pa24KTVFJREFRQUIKLS0tLS1FTkQgUFVCTElDIEtFWS0tLS0tCg==' | base64 -d > /tmp/public.pem
           tar -C /tmp -czf /tmp/kiarash-current.tar.gz kiarash
           openssl rand 32 > /tmp/session.key
           openssl enc -aes-256-cbc -pbkdf2 -salt -in /tmp/kiarash-current.tar.gz -out /tmp/kiarash-current.enc -pass file:/tmp/session.key
