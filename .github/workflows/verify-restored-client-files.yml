@@ -1,0 +1,37 @@
+name: Verify restored client files
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/verify-restored-client-files.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      HOST: 91.107.150.117
+      SSHPASS: ${{ secrets.PASS }}
+    steps:
+      - name: Install sshpass
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y sshpass
+      - name: Verify exact live TXT hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15'
+          check() {
+            user="$1"; expected="$2"
+            actual="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "sha256sum /root/gravitas-vpn/xray-clients/${user}.vless.txt | awk '{print \$1}'")"
+            [[ "$actual" == "$expected" ]] || { echo "${user} live config mismatch"; exit 1; }
+            echo "${user} live TXT matches expected restored config."
+          }
+          check hossein 8d938ed9f7d517c7fab06df22a1e10678da2092f5529b9bf7af5ea3f6772fae9
+          check kiarash 806349897bc1ab3564664c0167c790d5fd8bb95832e7c7cbd504f17ee1ad104c
+          check ahmad b6a005def65bdeb668ff6ce38db8ae7f1ea6f3dce6466dd47b22e0680315ffc3
