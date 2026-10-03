@@ -13,8 +13,8 @@ SERVER_NAME="speed.cloudflare.com"
 FALLBACK_SERVER_NAME=""
 FALLBACK_DEST="1.1.1.1:443"
 XHTTP_SERVER_NAME="speed.cloudflare.com"
-TLS_CERT="$STATE_DIR/tls/fullchain.pem"
-TLS_KEY="$STATE_DIR/tls/privkey.pem"
+TLS_CERT="/usr/local/etc/xray/tls/fullchain.pem"
+TLS_KEY="/usr/local/etc/xray/tls/privkey.pem"
 TLS_WS_PATH="/gravitas-ws"
 
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
