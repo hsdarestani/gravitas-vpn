@@ -48,7 +48,7 @@ jobs:
           set -euo pipefail
           SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3'
           sshpass -e ssh ${SSH_OPTS} root@"${HOST}" 'mkdir -p /opt/gravitas-vpn/scripts /opt/gravitas-vpn/panel && chmod 700 /opt/gravitas-vpn'
-          sshpass -e scp ${SSH_OPTS} scripts/setup_xray.sh scripts/manage_xray_user.sh scripts/enable_xray_stats.sh scripts/setup_panel.sh root@"${HOST}":/opt/gravitas-vpn/scripts/
+          sshpass -e scp ${SSH_OPTS} scripts/setup_xray.sh scripts/setup_ws_tls.sh scripts/manage_xray_user.sh scripts/enable_xray_stats.sh scripts/setup_panel.sh root@"${HOST}":/opt/gravitas-vpn/scripts/
           sshpass -e scp ${SSH_OPTS} panel/app.py root@"${HOST}":/opt/gravitas-vpn/panel/app.py
 
       - name: Use new primary server IP
@@ -62,6 +62,13 @@ jobs:
             ip -4 addr show | grep -F "91.107.150.117/" >/dev/null
             echo "Using primary server IP 91.107.150.117; stale Floating-IP state removed."
           '
+
+      - name: Prepare trusted TLS certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3'
+          sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "chmod 700 /opt/gravitas-vpn/scripts/*.sh && /opt/gravitas-vpn/scripts/setup_ws_tls.sh '${HOST}'"
 
       - name: Configure Xray VLESS Reality
         shell: bash
@@ -107,6 +114,9 @@ jobs:
               test -s "/root/gravitas-vpn/xray-clients/${user}-xhttp.vless.txt"
               test -s "/root/gravitas-vpn/xray-clients/${user}-xhttp.png"
               test -s "/root/gravitas-vpn/xray-clients/${user}-xhttp.json"
+              test -s "/root/gravitas-vpn/xray-clients/${user}-ws-tls.vless.txt"
+              test -s "/root/gravitas-vpn/xray-clients/${user}-ws-tls.png"
+              test -s "/root/gravitas-vpn/xray-clients/${user}-ws-tls.json"
             done
             PANEL_PASS="$(cat /etc/gravitas-panel/admin_password)"
             PANEL_JSON="$(curl -ksSf -u "admin:${PANEL_PASS}" https://127.0.0.1:9443/api/data)"
@@ -123,15 +133,18 @@ jobs:
           PORT="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" 'cat /etc/gravitas-xray/port')"
           FALLBACK_PORT="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" 'cat /etc/gravitas-xray/fallback-port')"
           XHTTP_PORT="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" 'cat /etc/gravitas-xray/xhttp-port')"
+          WS_TLS_PORT="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" 'cat /etc/gravitas-xray/ws-tls-port')"
           VPN_ENDPOINT="${HOST}"
           [[ "$PORT" =~ ^[0-9]+$ ]] || { echo 'Invalid Xray port returned by server.' >&2; exit 1; }
           [[ "$FALLBACK_PORT" =~ ^[0-9]+$ ]] || { echo 'Invalid fallback Xray port returned by server.' >&2; exit 1; }
           [[ "$XHTTP_PORT" =~ ^[0-9]+$ ]] || { echo 'Invalid XHTTP Xray port returned by server.' >&2; exit 1; }
+          [[ "$WS_TLS_PORT" =~ ^[0-9]+$ ]] || { echo 'Invalid WS TLS Xray port returned by server.' >&2; exit 1; }
           nc -zvw 8 "${VPN_ENDPOINT}" "${PORT}"
           nc -zvw 8 "${VPN_ENDPOINT}" "${FALLBACK_PORT}"
           nc -zvw 8 "${VPN_ENDPOINT}" "${XHTTP_PORT}"
+          nc -zvw 8 "${VPN_ENDPOINT}" "${WS_TLS_PORT}"
           nc -zvw 8 "${HOST}" 9443
-          echo "External reachability succeeded for primary ${PORT}, fallback ${FALLBACK_PORT}, XHTTP ${XHTTP_PORT}, and panel."
+          echo "External reachability succeeded for primary ${PORT}, fallback ${FALLBACK_PORT}, XHTTP ${XHTTP_PORT}, WS TLS ${WS_TLS_PORT}, and panel."
 
       - name: End-to-end VLESS REALITY smoke test
         shell: bash
@@ -142,7 +155,8 @@ jobs:
           sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/xray-clients/hossein.json /tmp/gravitas-primary.json
           sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/xray-clients/hossein-fallback.json /tmp/gravitas-fallback.json
           sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/xray-clients/hossein-xhttp.json /tmp/gravitas-xhttp.json
-          chmod 600 /tmp/gravitas-primary.json /tmp/gravitas-fallback.json /tmp/gravitas-xhttp.json
+          sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/xray-clients/hossein-ws-tls.json /tmp/gravitas-ws-tls.json
+          chmod 600 /tmp/gravitas-primary.json /tmp/gravitas-fallback.json /tmp/gravitas-xhttp.json /tmp/gravitas-ws-tls.json
 
           SERVER_EGRESS_V4="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "curl -4 -fsS --max-time 15 https://www.cloudflare.com/cdn-cgi/trace | sed -n 's/^ip=//p' | head -n1")"
           SERVER_EGRESS_V6="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "curl -6 -fsS --max-time 15 https://www.cloudflare.com/cdn-cgi/trace | sed -n 's/^ip=//p' | head -n1" || true)"
@@ -186,4 +200,5 @@ jobs:
           test_tunnel /tmp/gravitas-primary.json "Primary"
           test_tunnel /tmp/gravitas-fallback.json "Fallback"
           test_tunnel /tmp/gravitas-xhttp.json "XHTTP"
-          echo "Primary, fallback, and XHTTP Gravitas REALITY paths passed end-to-end validation."
+          test_tunnel /tmp/gravitas-ws-tls.json "WS-TLS"
+          echo "Primary, fallback, XHTTP, and WS-TLS Gravitas paths passed end-to-end validation."
