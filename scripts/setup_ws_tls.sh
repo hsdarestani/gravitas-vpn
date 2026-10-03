@@ -3,14 +3,15 @@ set -euo pipefail
 
 HOST="${1:-}"
 STATE_DIR="/etc/gravitas-xray"
-TLS_DIR="$STATE_DIR/tls"
+TLS_DIR="/usr/local/etc/xray/tls"
 
 [[ -n "$HOST" ]] || { echo "Server IPv4 is required." >&2; exit 1; }
 [[ "$HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Expected IPv4 address." >&2; exit 1; }
 
 DOMAIN="${HOST//./-}.sslip.io"
-mkdir -p "$TLS_DIR"
-chmod 700 "$STATE_DIR" "$TLS_DIR"
+mkdir -p "$STATE_DIR"
+install -d -m 750 -o root -g nogroup "$TLS_DIR"
+chmod 700 "$STATE_DIR"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
