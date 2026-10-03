@@ -1,0 +1,47 @@
+name: Verify REALITY state
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/verify-reality-state.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      HOST: 91.107.245.200
+      SSHPASS: ${{ secrets.PASS }}
+    steps:
+      - name: Install sshpass
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y sshpass
+      - name: Verify server REALITY identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15'
+          sshpass -e ssh ${SSH_OPTS} root@"${HOST}" '
+            set -euo pipefail
+            expected_pbk="ug1uWAQEO9qWpWS3-d3t8kchiCk1Fc3oQY9oqZ0Y1VE"
+            expected_sid="250360777428f3f9"
+            expected_uuid="a6257aed-55aa-45c3-8679-d053e879cc46"
+
+            private="$(cat /etc/gravitas-xray/reality-private)"
+            key_output="$(/usr/local/bin/xray x25519 -i "$private")"
+            actual_pbk="$(printf "%s\n" "$key_output" | awk -F": *" "/^(Password( \\(PublicKey\\))?|PublicKey|Public key):/ {print \$2; exit}")"
+            actual_sid="$(cat /etc/gravitas-xray/short-id)"
+            actual_uuid="$(cat /etc/gravitas-xray/users/ahmad.uuid)"
+
+            [[ "$actual_pbk" == "$expected_pbk" ]] || { echo "REALITY public key MISMATCH"; exit 2; }
+            [[ "$actual_sid" == "$expected_sid" ]] || { echo "REALITY short ID MISMATCH"; exit 3; }
+            [[ "$actual_uuid" == "$expected_uuid" ]] || { echo "Ahmad UUID MISMATCH"; exit 4; }
+            [[ "$(cat /etc/gravitas-xray/host)" == "91.107.245.200" ]] || { echo "Host state MISMATCH"; exit 5; }
+
+            echo "REALITY key, short ID, Ahmad UUID, and host state all match the old working profile."
+          '
