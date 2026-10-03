@@ -91,11 +91,8 @@ fi
 XHTTP_PORT="$(cat "$STATE_DIR/xhttp-port")"
 chmod 600 "$STATE_DIR/xhttp-port"
 
-if [[ ! -s "$STATE_DIR/xhttp-path" ]]; then
-  printf '/g-%s\n' "$(openssl rand -hex 8)" > "$STATE_DIR/xhttp-path"
-fi
-XHTTP_PATH="$(tr -d '\r\n' < "$STATE_DIR/xhttp-path")"
-[[ "$XHTTP_PATH" == /* ]] || { echo "Invalid XHTTP path." >&2; exit 1; }
+XHTTP_PATH="/gravitas-xhttp"
+printf '%s\n' "$XHTTP_PATH" > "$STATE_DIR/xhttp-path"
 chmod 600 "$STATE_DIR/xhttp-path"
 
 if [[ ! -s "$STATE_DIR/reality-private" || ! -s "$STATE_DIR/reality-password" ]]; then
