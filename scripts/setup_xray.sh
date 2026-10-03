@@ -17,6 +17,13 @@ fi
 mkdir -p "$STATE_DIR" "$USER_DIR" "$CLIENT_DIR"
 chmod 700 "$STATE_DIR" "$USER_DIR" "$CLIENT_DIR"
 
+# Clean obsolete routing/transport state from earlier experiments. The live
+# service intentionally uses only the server primary IPv4 and one REALITY/TCP
+# listener.
+rm -f "$STATE_DIR/egress-ip" "$STATE_DIR/fallback-port" "$STATE_DIR/xhttp-port" \
+  "$STATE_DIR/xhttp-path" "$STATE_DIR/ws-tls-port" "$STATE_DIR/tls-domain"
+rm -f "$CLIENT_DIR"/*-fallback.* "$CLIENT_DIR"/*-xhttp.* "$CLIENT_DIR"/*-ws-tls.* 2>/dev/null || true
+
 if [[ -n "$HOST" ]]; then
   printf '%s\n' "$HOST" > "$STATE_DIR/host"
   chmod 600 "$STATE_DIR/host"
