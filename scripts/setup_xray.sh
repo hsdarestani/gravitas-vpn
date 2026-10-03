@@ -288,7 +288,7 @@ for uuid_file in "$USER_DIR"/*.uuid; do
   qrencode -o "$CLIENT_DIR/$user-fallback.png" -s 7 -m 2 "$fallback_uri"
 
   xhttp_path_encoded="$(printf '%s' "$XHTTP_PATH" | jq -sRr @uri)"
-  xhttp_uri="vless://${uuid}@${CLIENT_HOST}:${XHTTP_PORT}?encryption=none&security=reality&sni=${XHTTP_SERVER_NAME}&fp=chrome&pbk=${REALITY_PASSWORD}&sid=${SHORT_ID}&spx=%2F&type=xhttp&mode=auto&path=${xhttp_path_encoded}#Gravitas-${user}-XHTTP"
+  xhttp_uri="vless://${uuid}@${CLIENT_HOST}:${XHTTP_PORT}?encryption=none&security=reality&sni=${XHTTP_SERVER_NAME}&fp=chrome&pbk=${REALITY_PASSWORD}&sid=${SHORT_ID}&spx=%2F&type=xhttp&mode=stream-one&path=${xhttp_path_encoded}#Gravitas-${user}-XHTTP"
   printf '%s\n' "$xhttp_uri" > "$CLIENT_DIR/$user-xhttp.vless.txt"
   qrencode -o "$CLIENT_DIR/$user-xhttp.png" -s 7 -m 2 "$xhttp_uri"
 
@@ -348,7 +348,7 @@ for uuid_file in "$USER_DIR"/*.uuid; do
         streamSettings:{
           network:"xhttp",
           security:"reality",
-          xhttpSettings:{mode:"auto",path:$path},
+          xhttpSettings:{mode:"stream-one",path:$path},
           realitySettings:{fingerprint:"chrome",serverName:$sni,publicKey:$password,shortId:$shortId,spiderX:"/"}
         }
       }]
