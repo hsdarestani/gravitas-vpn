@@ -13,6 +13,9 @@ SERVER_NAME="speed.cloudflare.com"
 FALLBACK_SERVER_NAME=""
 FALLBACK_DEST="1.1.1.1:443"
 XHTTP_SERVER_NAME="speed.cloudflare.com"
+TLS_CERT="$STATE_DIR/tls/fullchain.pem"
+TLS_KEY="$STATE_DIR/tls/privkey.pem"
+TLS_WS_PATH="/gravitas-ws"
 
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   echo "Run as root." >&2
@@ -95,6 +98,27 @@ XHTTP_PATH="/gravitas-xhttp"
 printf '%s\n' "$XHTTP_PATH" > "$STATE_DIR/xhttp-path"
 chmod 600 "$STATE_DIR/xhttp-path"
 
+[[ -s "$STATE_DIR/tls-domain" && -s "$TLS_CERT" && -s "$TLS_KEY" ]] || {
+  echo "Trusted TLS material is missing; run setup_ws_tls.sh first." >&2
+  exit 1
+}
+TLS_DOMAIN="$(tr -d '\r\n' < "$STATE_DIR/tls-domain")"
+
+if [[ ! -s "$STATE_DIR/ws-tls-port" ]]; then
+  ws_tls_selected=""
+  for candidate in 2096 2087 8443 2053; do
+    [[ "$candidate" == "$PORT" || "$candidate" == "$FALLBACK_PORT" || "$candidate" == "$XHTTP_PORT" ]] && continue
+    if ! ss -ltnH "sport = :${candidate}" 2>/dev/null | grep -q .; then
+      ws_tls_selected="$candidate"
+      break
+    fi
+  done
+  [[ -n "$ws_tls_selected" ]] || { echo "No TLS WebSocket TCP port is free." >&2; exit 1; }
+  printf '%s\n' "$ws_tls_selected" > "$STATE_DIR/ws-tls-port"
+fi
+WS_TLS_PORT="$(cat "$STATE_DIR/ws-tls-port")"
+chmod 600 "$STATE_DIR/ws-tls-port"
+
 if [[ ! -s "$STATE_DIR/reality-private" || ! -s "$STATE_DIR/reality-password" ]]; then
   key_output="$($XRAY_BIN x25519)"
   private_key="$(printf '%s\n' "$key_output" | awk -F': *' '/^(PrivateKey|Private key):/ {print $2; exit}')"
@@ -141,6 +165,7 @@ done
 # XHTTP must not use xtls-rprx-vision flow. Reuse the same UUIDs/emails with
 # a flow-less client list dedicated to the XHTTP inbound.
 xhttp_clients="$(jq '[.[] | {id:.id, email:.email}]' <<<"$clients")"
+ws_tls_clients="$xhttp_clients"
 
 CLIENT_HOST="$HOST"
 if [[ -s "$STATE_DIR/egress-ip" ]]; then
@@ -157,13 +182,19 @@ jq -n \
   --argjson port "$PORT" \
   --argjson fallbackPort "$FALLBACK_PORT" \
   --argjson xhttpPort "$XHTTP_PORT" \
+  --argjson wsTlsPort "$WS_TLS_PORT" \
   --argjson clients "$clients" \
   --argjson xhttpClients "$xhttp_clients" \
+  --argjson wsTlsClients "$ws_tls_clients" \
   --arg sni "$SERVER_NAME" \
   --arg fallbackSni "$FALLBACK_SERVER_NAME" \
   --arg fallbackDest "$FALLBACK_DEST" \
   --arg xhttpSni "$XHTTP_SERVER_NAME" \
   --arg xhttpPath "$XHTTP_PATH" \
+  --arg tlsDomain "$TLS_DOMAIN" \
+  --arg tlsCert "$TLS_CERT" \
+  --arg tlsKey "$TLS_KEY" \
+  --arg tlsWsPath "$TLS_WS_PATH" \
   --arg privateKey "$PRIVATE_KEY" \
   --arg shortId "$SHORT_ID" \
   --arg egressIp "$EGRESS_IP" \
@@ -233,6 +264,28 @@ jq -n \
           }
         },
         sniffing:{enabled:true, destOverride:["http","tls","quic"], routeOnly:true}
+      },
+      {
+        tag:"vless-ws-tls",
+        listen:"0.0.0.0",
+        port:$wsTlsPort,
+        protocol:"vless",
+        settings:{clients:$wsTlsClients, decryption:"none"},
+        streamSettings:{
+          network:"ws",
+          security:"tls",
+          tlsSettings:{
+            minVersion:"1.2",
+            certificates:[{
+              certificateFile:$tlsCert,
+              keyFile:$tlsKey
+            }]
+          },
+          wsSettings:{
+            path:$tlsWsPath
+          }
+        },
+        sniffing:{enabled:true, destOverride:["http","tls"], routeOnly:true}
       }
     ],
     outbounds:[
@@ -260,11 +313,13 @@ if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: 
   ufw allow "${PORT}/tcp" >/dev/null
   ufw allow "${FALLBACK_PORT}/tcp" >/dev/null
   ufw allow "${XHTTP_PORT}/tcp" >/dev/null
+  ufw allow "${WS_TLS_PORT}/tcp" >/dev/null
 fi
 if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
   firewall-cmd --permanent --add-port="${PORT}/tcp" >/dev/null
   firewall-cmd --permanent --add-port="${FALLBACK_PORT}/tcp" >/dev/null
   firewall-cmd --permanent --add-port="${XHTTP_PORT}/tcp" >/dev/null
+  firewall-cmd --permanent --add-port="${WS_TLS_PORT}/tcp" >/dev/null
   firewall-cmd --reload >/dev/null
 fi
 
@@ -275,7 +330,8 @@ for uuid_file in "$USER_DIR"/*.uuid; do
   if [[ -e "$USER_DIR/$user.disabled" ]]; then
     rm -f "$CLIENT_DIR/$user.vless.txt" "$CLIENT_DIR/$user.png" "$CLIENT_DIR/$user.json" \
       "$CLIENT_DIR/$user-fallback.vless.txt" "$CLIENT_DIR/$user-fallback.png" "$CLIENT_DIR/$user-fallback.json" \
-      "$CLIENT_DIR/$user-xhttp.vless.txt" "$CLIENT_DIR/$user-xhttp.png" "$CLIENT_DIR/$user-xhttp.json"
+      "$CLIENT_DIR/$user-xhttp.vless.txt" "$CLIENT_DIR/$user-xhttp.png" "$CLIENT_DIR/$user-xhttp.json" \
+      "$CLIENT_DIR/$user-ws-tls.vless.txt" "$CLIENT_DIR/$user-ws-tls.png" "$CLIENT_DIR/$user-ws-tls.json"
     continue
   fi
   uuid="$(tr -d '\r\n' < "$uuid_file")"
@@ -291,6 +347,11 @@ for uuid_file in "$USER_DIR"/*.uuid; do
   xhttp_uri="vless://${uuid}@${CLIENT_HOST}:${XHTTP_PORT}?encryption=none&security=reality&sni=${XHTTP_SERVER_NAME}&fp=chrome&pbk=${REALITY_PASSWORD}&sid=${SHORT_ID}&spx=%2F&type=xhttp&mode=stream-one&path=${xhttp_path_encoded}#Gravitas-${user}-XHTTP"
   printf '%s\n' "$xhttp_uri" > "$CLIENT_DIR/$user-xhttp.vless.txt"
   qrencode -o "$CLIENT_DIR/$user-xhttp.png" -s 7 -m 2 "$xhttp_uri"
+
+  tls_ws_path_encoded="$(printf '%s' "$TLS_WS_PATH" | jq -sRr @uri)"
+  ws_tls_uri="vless://${uuid}@${TLS_DOMAIN}:${WS_TLS_PORT}?encryption=none&security=tls&sni=${TLS_DOMAIN}&type=ws&host=${TLS_DOMAIN}&path=${tls_ws_path_encoded}#Gravitas-${user}-WS-TLS"
+  printf '%s\n' "$ws_tls_uri" > "$CLIENT_DIR/$user-ws-tls.vless.txt"
+  qrencode -o "$CLIENT_DIR/$user-ws-tls.png" -s 7 -m 2 "$ws_tls_uri"
 
   jq -n \
     --arg host "$CLIENT_HOST" \
@@ -353,10 +414,38 @@ for uuid_file in "$USER_DIR"/*.uuid; do
         }
       }]
     }' > "$CLIENT_DIR/$user-xhttp.json"
+
+  jq -n \
+    --arg host "$TLS_DOMAIN" \
+    --argjson port "$WS_TLS_PORT" \
+    --arg id "$uuid" \
+    --arg sni "$TLS_DOMAIN" \
+    --arg path "$TLS_WS_PATH" \
+    '{
+      log:{loglevel:"warning"},
+      inbounds:[{
+        listen:"127.0.0.1",
+        port:10808,
+        protocol:"socks",
+        settings:{udp:true},
+        sniffing:{enabled:true,destOverride:["http","tls"],routeOnly:true}
+      }],
+      outbounds:[{
+        tag:"proxy",
+        protocol:"vless",
+        settings:{address:$host,port:$port,id:$id,encryption:"none"},
+        streamSettings:{
+          network:"ws",
+          security:"tls",
+          tlsSettings:{serverName:$sni,allowInsecure:false},
+          wsSettings:{path:$path,headers:{Host:$sni}}
+        }
+      }]
+    }' > "$CLIENT_DIR/$user-ws-tls.json"
 done
 chmod 600 "$CLIENT_DIR"/* 2>/dev/null || true
 
 install -m 700 /opt/gravitas-vpn/scripts/manage_xray_user.sh /usr/local/sbin/gravitas-xray-user
 
-printf 'Xray VLESS/REALITY active on %s TCP %s, fallback TCP %s, and XHTTP TCP %s.\n' "$CLIENT_HOST" "$PORT" "$FALLBACK_PORT" "$XHTTP_PORT"
+printf 'Xray transports active: REALITY %s:%s, fallback %s, XHTTP %s, WS+TLS %s:%s.\n' "$CLIENT_HOST" "$PORT" "$FALLBACK_PORT" "$XHTTP_PORT" "$TLS_DOMAIN" "$WS_TLS_PORT"
 printf 'Client material: %s\n' "$CLIENT_DIR"
