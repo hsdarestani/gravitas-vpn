@@ -12,6 +12,7 @@ DEFAULT_USERS=(hossein kiarash ahmad ehsan sajjad)
 SERVER_NAME="speed.cloudflare.com"
 FALLBACK_SERVER_NAME=""
 FALLBACK_DEST="1.1.1.1:443"
+XHTTP_SERVER_NAME="speed.cloudflare.com"
 
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   echo "Run as root." >&2
@@ -73,6 +74,30 @@ fi
 FALLBACK_PORT="$(cat "$STATE_DIR/fallback-port")"
 chmod 600 "$STATE_DIR/fallback-port"
 
+# Dedicated XHTTP + REALITY listener. Keep it separate from the existing
+# Vision/RAW listeners so older client profiles continue to work unchanged.
+if [[ ! -s "$STATE_DIR/xhttp-port" ]]; then
+  xhttp_selected=""
+  for candidate in 2083 8443 2096 2087; do
+    [[ "$candidate" == "$PORT" || "$candidate" == "$FALLBACK_PORT" ]] && continue
+    if ! ss -ltnH "sport = :${candidate}" 2>/dev/null | grep -q .; then
+      xhttp_selected="$candidate"
+      break
+    fi
+  done
+  [[ -n "$xhttp_selected" ]] || { echo "No XHTTP TCP port is free." >&2; exit 1; }
+  printf '%s\n' "$xhttp_selected" > "$STATE_DIR/xhttp-port"
+fi
+XHTTP_PORT="$(cat "$STATE_DIR/xhttp-port")"
+chmod 600 "$STATE_DIR/xhttp-port"
+
+if [[ ! -s "$STATE_DIR/xhttp-path" ]]; then
+  printf '/g-%s\n' "$(openssl rand -hex 8)" > "$STATE_DIR/xhttp-path"
+fi
+XHTTP_PATH="$(tr -d '\r\n' < "$STATE_DIR/xhttp-path")"
+[[ "$XHTTP_PATH" == /* ]] || { echo "Invalid XHTTP path." >&2; exit 1; }
+chmod 600 "$STATE_DIR/xhttp-path"
+
 if [[ ! -s "$STATE_DIR/reality-private" || ! -s "$STATE_DIR/reality-password" ]]; then
   key_output="$($XRAY_BIN x25519)"
   private_key="$(printf '%s\n' "$key_output" | awk -F': *' '/^(PrivateKey|Private key):/ {print $2; exit}')"
@@ -116,6 +141,10 @@ done
 
 [[ "$(jq 'length' <<<"$clients")" -gt 0 ]] || { echo "No enabled Xray users." >&2; exit 1; }
 
+# XHTTP must not use xtls-rprx-vision flow. Reuse the same UUIDs/emails with
+# a flow-less client list dedicated to the XHTTP inbound.
+xhttp_clients="$(jq '[.[] | {id:.id, email:.email}]' <<<"$clients")"
+
 CLIENT_HOST="$HOST"
 if [[ -s "$STATE_DIR/egress-ip" ]]; then
   EGRESS_IP="$(tr -d '\\r\\n' < "$STATE_DIR/egress-ip")"
@@ -130,10 +159,14 @@ mkdir -p "$(dirname "$XRAY_CONFIG")"
 jq -n \
   --argjson port "$PORT" \
   --argjson fallbackPort "$FALLBACK_PORT" \
+  --argjson xhttpPort "$XHTTP_PORT" \
   --argjson clients "$clients" \
+  --argjson xhttpClients "$xhttp_clients" \
   --arg sni "$SERVER_NAME" \
   --arg fallbackSni "$FALLBACK_SERVER_NAME" \
   --arg fallbackDest "$FALLBACK_DEST" \
+  --arg xhttpSni "$XHTTP_SERVER_NAME" \
+  --arg xhttpPath "$XHTTP_PATH" \
   --arg privateKey "$PRIVATE_KEY" \
   --arg shortId "$SHORT_ID" \
   --arg egressIp "$EGRESS_IP" \
@@ -179,6 +212,30 @@ jq -n \
           }
         },
         sniffing:{enabled:true, destOverride:["http","tls","quic"], routeOnly:true}
+      },
+      {
+        tag:"vless-xhttp",
+        listen:"0.0.0.0",
+        port:$xhttpPort,
+        protocol:"vless",
+        settings:{clients:$xhttpClients, decryption:"none"},
+        streamSettings:{
+          network:"xhttp",
+          security:"reality",
+          xhttpSettings:{
+            mode:"auto",
+            path:$xhttpPath
+          },
+          realitySettings:{
+            show:false,
+            dest:($xhttpSni + ":443"),
+            xver:0,
+            serverNames:[$xhttpSni],
+            privateKey:$privateKey,
+            shortIds:[$shortId]
+          }
+        },
+        sniffing:{enabled:true, destOverride:["http","tls","quic"], routeOnly:true}
       }
     ],
     outbounds:[
@@ -205,10 +262,12 @@ systemctl is-active --quiet xray
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
   ufw allow "${PORT}/tcp" >/dev/null
   ufw allow "${FALLBACK_PORT}/tcp" >/dev/null
+  ufw allow "${XHTTP_PORT}/tcp" >/dev/null
 fi
 if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
   firewall-cmd --permanent --add-port="${PORT}/tcp" >/dev/null
   firewall-cmd --permanent --add-port="${FALLBACK_PORT}/tcp" >/dev/null
+  firewall-cmd --permanent --add-port="${XHTTP_PORT}/tcp" >/dev/null
   firewall-cmd --reload >/dev/null
 fi
 
@@ -218,7 +277,8 @@ for uuid_file in "$USER_DIR"/*.uuid; do
   user="$(basename "$uuid_file" .uuid)"
   if [[ -e "$USER_DIR/$user.disabled" ]]; then
     rm -f "$CLIENT_DIR/$user.vless.txt" "$CLIENT_DIR/$user.png" "$CLIENT_DIR/$user.json" \
-      "$CLIENT_DIR/$user-fallback.vless.txt" "$CLIENT_DIR/$user-fallback.png" "$CLIENT_DIR/$user-fallback.json"
+      "$CLIENT_DIR/$user-fallback.vless.txt" "$CLIENT_DIR/$user-fallback.png" "$CLIENT_DIR/$user-fallback.json" \
+      "$CLIENT_DIR/$user-xhttp.vless.txt" "$CLIENT_DIR/$user-xhttp.png" "$CLIENT_DIR/$user-xhttp.json"
     continue
   fi
   uuid="$(tr -d '\r\n' < "$uuid_file")"
@@ -229,6 +289,11 @@ for uuid_file in "$USER_DIR"/*.uuid; do
   fallback_uri="vless://${uuid}@${CLIENT_HOST}:${FALLBACK_PORT}?encryption=none&flow=xtls-rprx-vision&security=reality&fp=chrome&pbk=${REALITY_PASSWORD}&sid=${SHORT_ID}&spx=%2F&type=tcp&headerType=none#Gravitas-${user}-iran-fallback"
   printf '%s\n' "$fallback_uri" > "$CLIENT_DIR/$user-fallback.vless.txt"
   qrencode -o "$CLIENT_DIR/$user-fallback.png" -s 7 -m 2 "$fallback_uri"
+
+  xhttp_path_encoded="$(printf '%s' "$XHTTP_PATH" | jq -sRr @uri)"
+  xhttp_uri="vless://${uuid}@${CLIENT_HOST}:${XHTTP_PORT}?encryption=none&security=reality&sni=${XHTTP_SERVER_NAME}&fp=chrome&pbk=${REALITY_PASSWORD}&sid=${SHORT_ID}&spx=%2F&type=xhttp&mode=auto&path=${xhttp_path_encoded}#Gravitas-${user}-XHTTP"
+  printf '%s\n' "$xhttp_uri" > "$CLIENT_DIR/$user-xhttp.vless.txt"
+  qrencode -o "$CLIENT_DIR/$user-xhttp.png" -s 7 -m 2 "$xhttp_uri"
 
   jq -n \
     --arg host "$CLIENT_HOST" \
@@ -261,10 +326,40 @@ for uuid_file in "$USER_DIR"/*.uuid; do
   jq --argjson fallbackPort "$FALLBACK_PORT" --arg fallbackSni "$FALLBACK_SERVER_NAME" \
     '.outbounds[0].settings.port = $fallbackPort | .outbounds[0].streamSettings.realitySettings.serverName = $fallbackSni' \
     "$CLIENT_DIR/$user.json" > "$CLIENT_DIR/$user-fallback.json"
+
+  jq -n \
+    --arg host "$CLIENT_HOST" \
+    --argjson port "$XHTTP_PORT" \
+    --arg id "$uuid" \
+    --arg sni "$XHTTP_SERVER_NAME" \
+    --arg password "$REALITY_PASSWORD" \
+    --arg shortId "$SHORT_ID" \
+    --arg path "$XHTTP_PATH" \
+    '{
+      log:{loglevel:"warning"},
+      inbounds:[{
+        listen:"127.0.0.1",
+        port:10808,
+        protocol:"socks",
+        settings:{udp:true},
+        sniffing:{enabled:true,destOverride:["http","tls","quic"],routeOnly:true}
+      }],
+      outbounds:[{
+        tag:"proxy",
+        protocol:"vless",
+        settings:{address:$host,port:$port,id:$id,encryption:"none"},
+        streamSettings:{
+          network:"xhttp",
+          security:"reality",
+          xhttpSettings:{mode:"auto",path:$path},
+          realitySettings:{fingerprint:"chrome",serverName:$sni,publicKey:$password,shortId:$shortId,spiderX:"/"}
+        }
+      }]
+    }' > "$CLIENT_DIR/$user-xhttp.json"
 done
 chmod 600 "$CLIENT_DIR"/* 2>/dev/null || true
 
 install -m 700 /opt/gravitas-vpn/scripts/manage_xray_user.sh /usr/local/sbin/gravitas-xray-user
 
-printf 'Xray VLESS/REALITY active on %s TCP %s with fallback TCP %s.\n' "$CLIENT_HOST" "$PORT" "$FALLBACK_PORT"
+printf 'Xray VLESS/REALITY active on %s TCP %s, fallback TCP %s, and XHTTP TCP %s.\n' "$CLIENT_HOST" "$PORT" "$FALLBACK_PORT" "$XHTTP_PORT"
 printf 'Client material: %s\n' "$CLIENT_DIR"
