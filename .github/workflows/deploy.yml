@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      HOST: 91.107.150.117
+      HOST: 91.107.245.200
       SSHPASS: ${{ secrets.PASS }}
 
     steps:
