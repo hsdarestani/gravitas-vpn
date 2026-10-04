@@ -22,6 +22,7 @@ jobs:
     timeout-minutes: 15
     env:
       HOST: 91.107.245.200
+      VPN_ENDPOINT: 49.12.112.59
       SSHPASS: ${{ secrets.PASS }}
 
     steps:
@@ -56,7 +57,7 @@ jobs:
         run: |
           set -euo pipefail
           SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3'
-          sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "chmod 700 /opt/gravitas-vpn/scripts/*.sh && /opt/gravitas-vpn/scripts/setup_xray.sh '${HOST}'"
+          sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "chmod 700 /opt/gravitas-vpn/scripts/*.sh && /opt/gravitas-vpn/scripts/setup_xray.sh '${VPN_ENDPOINT}'"
 
       - name: Enable Xray traffic statistics
         shell: bash
@@ -104,9 +105,9 @@ jobs:
           SSH_OPTS='-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15'
           PORT="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" 'cat /etc/gravitas-xray/port')"
           [[ "$PORT" =~ ^[0-9]+$ ]] || { echo 'Invalid Xray port returned by server.' >&2; exit 1; }
-          nc -zvw 8 "${HOST}" "${PORT}"
+          nc -zvw 8 "${VPN_ENDPOINT}" "${PORT}"
           nc -zvw 8 "${HOST}" 9443
-          echo "External reachability succeeded for Xray ${PORT}/tcp and panel 9443/tcp."
+          echo "External reachability succeeded for VPN endpoint ${VPN_ENDPOINT}:${PORT} and panel ${HOST}:9443."
 
       - name: End-to-end VLESS REALITY smoke test
         shell: bash
@@ -117,7 +118,9 @@ jobs:
           unzip -q /tmp/xray.zip xray -d /tmp/xray-bin
           sudo install -m 755 /tmp/xray-bin/xray /usr/local/bin/xray
           sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/xray-clients/hossein.json /tmp/gravitas-smoke.json
-          chmod 600 /tmp/gravitas-smoke.json
+          sshpass -e scp ${SSH_OPTS} root@"${HOST}":/root/gravitas-vpn/xray-clients/hossein.vless.txt /tmp/gravitas-hossein.vless.txt
+          grep -q "@${VPN_ENDPOINT}:" /tmp/gravitas-hossein.vless.txt
+          chmod 600 /tmp/gravitas-smoke.json /tmp/gravitas-hossein.vless.txt
 
           SERVER_EGRESS_V4="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "curl -4 -fsS --max-time 15 https://www.cloudflare.com/cdn-cgi/trace | sed -n 's/^ip=//p' | head -n1")"
           SERVER_EGRESS_V6="$(sshpass -e ssh ${SSH_OPTS} root@"${HOST}" "curl -6 -fsS --max-time 15 https://www.cloudflare.com/cdn-cgi/trace | sed -n 's/^ip=//p' | head -n1" || true)"
@@ -127,7 +130,7 @@ jobs:
           XRAY_PID=$!
           cleanup() {
             kill "${XRAY_PID}" 2>/dev/null || true
-            rm -f /tmp/gravitas-smoke.json /tmp/gravitas-smoke.trace
+            rm -f /tmp/gravitas-smoke.json /tmp/gravitas-hossein.vless.txt /tmp/gravitas-smoke.trace
           }
           trap cleanup EXIT
 
