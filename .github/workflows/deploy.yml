@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      HOST: 91.107.245.200
+      HOST: 49.12.112.59
       VPN_ENDPOINT: 49.12.112.59
       SSHPASS: ${{ secrets.PASS }}
 
